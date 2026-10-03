@@ -11,5 +11,10 @@ export const ELBOW_RADII=Object.freeze({
 });
 export function nominalElbowRadius(nps,kind,bendAngle=90){return bendAngle===90&&['lr','sr'].includes(kind)?ELBOW_RADII[nps]?.[kind==='lr'?0:1]??null:null;}
 export function elbowRadiusKind(p,nps){return ['lr','sr'].find(kind=>nominalElbowRadius(nps,kind,p.bendAngle)===p.bendRadius)??'custom';}
+export const ELBOW_SIDE_PRESETS=Object.freeze([
+ ['0','外背 · 0°'],['45','左上 · 外背側 45°'],['90','左側 · 90°'],['135','左下 · 內腹側 135°'],
+ ['180','內腹 · 180°'],['225','右下 · 內腹側 225°'],['270','右側 · 270°'],['315','右上 · 外背側 315°']
+]);
+export function elbowSidePreset(angle){const normalized=((angle%360)+360)%360;return ELBOW_SIDE_PRESETS.find(([value])=>Number(value)===normalized)?.[0]??'custom';}
 export const bendPositionFromBack=(distance,p)=>distance/(p.bendRadius+p.mainOD/2)*180/Math.PI;
 export function elbowEntryDimensions(p){const b=p.bendPosition*Math.PI/180,phi=p.surfaceClock*Math.PI/180,r=p.mainOD/2;return {back:(p.bendRadius+r)*b,belly:(p.bendRadius-r)*b,around:r*((phi%(2*Math.PI)+2*Math.PI)%(2*Math.PI))};}
