@@ -295,7 +295,6 @@ function validate(raw) {
   if(p.mainWall*2>=p.mainOD)error('mainWall','主管壁厚須小於外徑的一半。');
   if(p.branchWall*2>=p.branchOD)error('branchWall','支管壁厚須小於外徑的一半。');
   if(p.angle<5||p.angle>175)error('angle','支援夾角為 5° 至 175°。');
-  if(p.jointPosition<0||p.jointPosition>p.mainLength)error('jointPosition','接頭位置須位於主管長度範圍內。');
   for(const f of ['projection','rootGap','holeGap','padClearance'])if(p[f]<0)error(f,'間隙與伸入長度不可小於 0。');
   if(!['on','in'].includes(p.jointType))error('jointType','接頭型式須為外貼 on 或內插 in。');
   if(!['circle','ellipse','obround','rounded'].includes(p.padShape))error('padShape','補強板外形無效。');
@@ -402,7 +401,7 @@ function computeJointAtSamples(raw={}) {
   templates.push(makeTemplate('main','主管開孔包覆樣板','主管實際外徑包覆',close([[0,0],[mainC,0],[mainC,p.mainLength],[0,p.mainLength]]),[mainHole],[
     {points:innerHoleReference,label:'內壁孔緣投影參考',type:'inner-edge'},
     {points:[[mainC/2,0],[mainC/2,p.mainLength]],label:'接頭方位基準',type:'centerline'},
-    {points:[[0,p.jointPosition],[mainC,p.jointPosition]],label:'接頭軸基準',type:'centerline'},
+    ...(p.jointPosition>=0&&p.jointPosition<=p.mainLength?[{points:[[0,p.jointPosition],[mainC,p.jointPosition]],label:'虛擬中心面軸基準 X',type:'centerline'}]:[]),
   ],[p.jointType==='on'?'外貼孔徑工具：支管內半徑＋開孔徑向間隙。':'內插孔徑工具：支管外半徑＋開孔徑向間隙。',
     '起縫位於接頭方位的對面；本圖為外壁包覆，不是主管板材捲製下料。'],
     {coordinateSystem:'main-outer-wrap',azimuth:p.azimuth,seamRad:rad(p.azimuth)-Math.PI,localArcOffset:mainC/2}));

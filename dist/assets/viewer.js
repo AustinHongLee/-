@@ -134,7 +134,9 @@ export class JointViewer {
       this.line(c,0xffd099,this.parts.pad);this.line(outerHole3D,0xffd099,this.parts.pad);
       // Trace actual split-piece boundaries on the formed outer face.
       if(pad.split!=='single')for(const t of result.templates.filter(t=>t.id.startsWith('pad-'))) {
-        const uv=t.outer.map(([x,u])=>[x+t.mapping.origin[0],u+t.mapping.origin[1]]);
+        const uv=t.mapping.paperAxes==='u-x'
+          ?t.outer.map(([u,x])=>[x+t.mapping.origin[1],u+t.mapping.origin[0]])
+          :t.outer.map(([x,u])=>[x+t.mapping.origin[0],u+t.mapping.origin[1]]);
         this.line(uv.map(([x,u])=>cylindricalUVToWorld([x,(u/basisRadius)*(pad.outerRadius+.2)],pad.outerRadius+.2,p.azimuth)),0x72491d,this.parts.pad);
       }
     }

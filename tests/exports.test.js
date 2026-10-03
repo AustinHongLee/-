@@ -248,4 +248,175 @@ check('Fabrication numeric resolution and station precision follow the stated to
   assert.ok(guarded.includes('0.03 mm × 1.1'));
   assert.ok(guarded.includes('並非連續曲線誤差的嚴格數學上界'));
 });
+check('Outward branch field paper mirrors one full turn without changing cut depths or stock geometry', () => {
+  for (const angle of [25, 90, 145]) for (const offset of [0, 12]) {
+    const r = kernel.computeJoint({ ...kernel.DEFAULT_PARAMS, angle, offset, azimuth: 67, mainLength: 2000, jointPosition: 1000 });
+    assert.equal(r.valid, true, JSON.stringify(r.errors));
+    const raw = r.templates.find(t => t.id === 'branch'), before = structuredClone(raw);
+    const full = mod.createBranchFieldTemplate(raw, r);
+    assert.equal(full.id, 'branch');
+    assert.equal(full.outerRole, 'paper-boundary');
+    assert.equal(full.mapping.paperTransform, 'branch-mirror-x');
+    assert.ok(Math.abs(full.width - (Math.PI * r.params.branchOD + 15)) < 1e-10);
+    const cut = full.references.find(ref => ref.type === 'cut-line');
+    assert.equal(cut.closed, false);
+    full.mapping.originalOuterCut.forEach((point, i) => {
+      assert.ok(Math.abs(cut.points[i][0] + point[0] - full.mapping.circumference) < 1e-10);
+      assert.ok(Math.abs(cut.points[i][1] + full.mapping.paperTopDepth - point[1]) < 1e-10);
+    });
+    assert.equal(cut.points[0][0], full.mapping.circumference); // 0° at the right, 360° at the left
+    assert.equal(cut.points.at(-1)[0], 0);
+    assert.strictEqual(mod.createBranchFieldTemplate(full, r), full);
+    assert.deepEqual(raw, before);
+    const svg = mod.templateSVG(full);
+    assert.ok(svg.includes('data-layer="CUT_FISHMOUTH"'));
+    assert.ok(svg.includes('data-layer="GLUE_TAB"'));
+    assert.ok(svg.includes('細點框只裁紙'));
+    assert.ok(!svg.includes('0° 起縫</text>')); // never print the old opposite-handed angle legend
+  }
+});
+check('Short mouth paper uses the positive physical datum and contains the union of both edge curves', () => {
+  for (const branchLength of [3, 200]) {
+    const r = kernel.computeJoint({ ...kernel.DEFAULT_PARAMS, branchLength, branchWall: 22, padEnabled: false });
+    assert.equal(r.valid, true, JSON.stringify(r.errors));
+    const local = mod.createBranchCuttingWrap(r);
+    assert.equal(local.id, 'branch-local');
+    assert.ok(local.mapping.originalDepthOrigin > 0);
+    const ring = local.references.find(ref => ref.type === 'datum' && ref.label.includes('定位環'));
+    assert.equal(ring.points[0][1], local.mapping.localDatumY);
+    for (const [type, original] of [['cut-line', local.mapping.originalOuterCut], ['inner-edge', local.mapping.originalInnerEdge]]) {
+      const ref = local.references.find(ref => ref.type === type);
+      original.forEach(([u, depth], i) => {
+        assert.ok(Math.abs(ref.points[i][0] + u - local.mapping.circumference) < 1e-10);
+        assert.ok(Math.abs(ref.points[i][1] + local.mapping.originalDepthOrigin - local.mapping.localDatumY - depth) < 1e-10);
+        assert.ok(ref.points[i][1] >= -1e-9 && ref.points[i][1] <= local.height + 1e-9);
+      });
+    }
+    if (local.mapping.paperTopDepth < 0) assert.ok(local.notes.some(note => note.includes('凸出直端')));
+    assert.ok(local.notes.some(note => note.includes('沿管軸量')));
+    const transformedResult = { ...r, templates: r.templates.map(t => t.id === 'branch' ? mod.createBranchFieldTemplate(t, r) : t) };
+    assert.deepEqual(mod.createBranchCuttingWrap(transformedResult).references.find(ref => ref.type === 'cut-line').points,
+      local.references.find(ref => ref.type === 'cut-line').points);
+  }
+  // Synthetic inner reference extends above and below the outer curve: neither end may be clipped.
+  const r = kernel.computeJoint({ ...kernel.DEFAULT_PARAMS, padEnabled: false });
+  const changed = structuredClone(r), branch = changed.templates.find(t => t.id === 'branch');
+  const inner = branch.references.find(ref => ref.type === 'inner-edge');
+  inner.points[3][1] = 1;
+  inner.points[6][1] = branch.height + 25;
+  const local = mod.createBranchCuttingWrap(changed);
+  assert.equal(local.mapping.paperTopDepth, -9);
+  assert.ok(local.mapping.localDatumY > 10);
+  assert.ok(local.height > 25 + branch.height);
+});
+check('Branch DXF isolates a closed paper rectangle from an open fishmouth curve and preserves closed references', () => {
+  const r = kernel.computeJoint(kernel.DEFAULT_PARAMS), local = mod.createBranchCuttingWrap(r);
+  local.references.push({ points: [[2, 2], [5, 2], [5, 5], [2, 2]], label: '參考閉線', type: 'datum', closed: true });
+  const dxf = mod.templateDXF(local), entities = dxf.split('0\r\nLWPOLYLINE\r\n').slice(1);
+  assert.match(entities[0], /8\r\nPAPER_BOUNDARY[\s\S]*90\r\n4\r\n70\r\n1/);
+  const cut = entities.find(entity => entity.includes('8\r\nCUT_FISHMOUTH\r\n'));
+  assert.ok(cut);
+  assert.match(cut, /70\r\n0/);
+  assert.equal(Number(cut.match(/90\r\n(\d+)/)[1]), local.mapping.originalOuterCut.length);
+  assert.ok(!entities.some(entity => entity.includes('8\r\nCUT_OUTER\r\n')));
+  assert.match(entities.at(-1), /90\r\n3\r\n70\r\n1/);
+  // A legacy untyped mock with a metal outline keeps the original CUT_OUTER role.
+  assert.match(mod.templateDXF(template).split('0\r\nLWPOLYLINE\r\n')[1], /8\r\nCUT_OUTER/);
+});
+check('Pad field axes swap exactly, preserve supplied arrows, and locate retained material without false cuts', () => {
+  for (const padSplit of ['single', 'axial', 'circumferential']) for (const padManufacturing of ['neutral', 'formed-normal']) {
+    const r = kernel.computeJoint({ ...kernel.DEFAULT_PARAMS, padSplit, padManufacturing, offset: 12, azimuth: 37 });
+    assert.equal(r.valid, true, JSON.stringify(r.errors));
+    const pads = r.templates.filter(t => t.id.startsWith('pad'));
+    const field = pads.map(raw => {
+      const before = structuredClone(raw), t = mod.createPadFieldTemplate(raw, r);
+      assert.equal(t.id, raw.id);
+      assert.equal(t.mapping.paperAxes, 'u-x');
+      assert.deepEqual(t.mapping.baseOrigin, raw.mapping.origin);
+      assert.deepEqual(t.mapping.origin, [raw.mapping.origin[1], raw.mapping.origin[0]]);
+      assert.equal(t.width, raw.height); assert.equal(t.height, raw.width);
+      raw.outer.forEach(([x, u], i) => assert.deepEqual(t.outer[i], [u, x]));
+      raw.holes.forEach((hole, h) => hole.forEach(([x, u], i) => assert.deepEqual(t.holes[h][i], [u, x])));
+      assert.ok(t.references.some(ref => ref.type === 'datum' && ref.label.startsWith('定位 X')));
+      const pos = t.mapping.positioning.datum;
+      assert.ok(Math.abs(pos.axial - raw.mapping.origin[0] - pos.paper[1]) < 1e-10);
+      assert.ok(Math.abs(pos.arc - raw.mapping.origin[1] - pos.paper[0]) < 1e-10);
+      assert.ok(Number.isFinite(pos.mainOuterArc));
+      assert.ok(t.notes.some(note => note.includes('局部周向弧長')));
+      assert.ok(!t.references.some(ref => ref.type === 'cut-line'));
+      assert.strictEqual(mod.createPadFieldTemplate(t, r), t);
+      assert.deepEqual(raw, before);
+      return t;
+    });
+    if (padSplit !== 'single') {
+      const seamLabels = field.map(t => t.references.filter(ref => ref.type === 'seam').map(ref => ref.label).sort());
+      assert.ok(seamLabels[0].length >= 2);
+      assert.deepEqual(seamLabels[0], seamLabels[1]);
+    }
+  }
+  const supplied = { ...template, id: 'pad', mapping: { coordinateSystem: 'main-local-cylindrical', origin: [20, -10] },
+    references: [{ points: [[5, 10], [8, 10]], type: 'direction', label: '既有箭頭', arrow: true, labelPosition: [7, 9] }] };
+  const field = mod.createPadFieldTemplate(supplied);
+  assert.deepEqual(field.references[0].points, [[10, 5], [10, 8]]);
+  assert.deepEqual(field.references[0].labelPosition, [9, 7]);
+  assert.equal(field.references[0].arrow, true);
+});
+check('Local main paper moves and clamps absolute datum text while JSON permits virtual axis origins', () => {
+  const r = kernel.computeJoint(kernel.DEFAULT_PARAMS), main = r.templates.find(t => t.id === 'main');
+  const c = Math.PI * r.params.mainOD;
+  main.references.push({ points: [[c / 2, r.params.jointPosition - 3], [c / 2, r.params.jointPosition + 3]],
+    label: '實體軸線穿入點', labelPosition: [c / 2 + 3, r.params.jointPosition + 3], type: 'datum' });
+  const patch = mod.createMainOpeningPatch(r), ref = patch.references.find(ref => ref.label === '實體軸線穿入點');
+  assert.ok(ref);
+  assert.ok(ref.labelPosition[0] >= 0 && ref.labelPosition[0] <= patch.width);
+  assert.ok(ref.labelPosition[1] >= 0 && ref.labelPosition[1] <= patch.height);
+  for (const jointPosition of [-67.128, 1067.128]) {
+    const virtual = { ...params, jointPosition };
+    assert.deepEqual(mod.readProjectJSON(mod.projectJSON(virtual)).params, virtual);
+  }
+  const html = mod.buildReportHTML(r, { id: 'FIELD-03' }, { mainPattern: 'local', branchPattern: 'local' });
+  assert.ok(html.includes('主管中心面軸基準 X（虛擬）'));
+  assert.ok(html.includes('支管軸線穿主管外表面'));
+  assert.ok(html.includes('通過支管軸線且平行主管軸線的平面'));
+  assert.ok(!html.includes('位於兩軸線平面'));
+  assert.ok(html.includes('數值輪廓誤差'));
+});
+check('Field reports use the same local geometry and count dedicated instructions and all physical pages', () => {
+  const r = kernel.computeJoint(kernel.DEFAULT_PARAMS);
+  r.stationTable = kernel.computeExactStationTable(r, 24);
+  const derived = { ...r, templates: [...r.templates.map(t => t.id === 'branch' ? mod.createBranchFieldTemplate(t, r) : t.id.startsWith('pad') ? mod.createPadFieldTemplate(t, r) : t), mod.createMainOpeningPatch(r), mod.createBranchCuttingWrap(r)] };
+  for (const paper of ['A4', 'A3']) for (const orientation of ['portrait', 'landscape']) {
+    const options = { paper, orientation, mainPattern: 'local', branchPattern: 'local' }, plan = mod.reportPagePlan(derived, options);
+    assert.equal(plan.parts.length, r.templates.length); // derived alternatives are not duplicate default parts
+    const branch = plan.parts.find(part => part.template.id === 'branch').template;
+    assert.equal(branch.mapping.sourceTemplate, 'branch');
+    assert.equal(branch.mapping.localCuttingWrap, true);
+    assert.deepEqual(branch.references.find(ref => ref.type === 'cut-line').points, mod.createBranchCuttingWrap(r).references.find(ref => ref.type === 'cut-line').points);
+    const html = mod.buildReportHTML(derived, { id: 'FIELD-04' }, options);
+    assert.equal((html.match(/<section class="page /g) ?? []).length, plan.totalPages);
+    assert.equal((html.match(/class="page field-notes-page"/g) ?? []).length, plan.notePages);
+    assert.equal((html.match(/data-scale="1mm-per-svg-unit"/g) ?? []).length, plan.parts.reduce((n, part) => n + part.pageCount, 0));
+  }
+  const options = { paper: 'A4', mainPattern: 'local', branchPattern: 'local', orientation: 'auto' };
+  assert.equal(mod.estimateReportPages(derived, options), Math.min(...['portrait', 'landscape'].map(orientation => mod.estimateReportPages(derived, { ...options, orientation }))));
+  assert.throws(() => mod.reportPagePlan(r, { branchPattern: 'scale' }), /支管樣板/);
+});
+check('Small branch labels adapt their spacing while exact station values and all ticks remain', () => {
+  const r = kernel.computeJoint({ ...kernel.DEFAULT_PARAMS, branchOD: 20, branchWall: 2, angle: 90, samples: 397, autoPrecision: false });
+  assert.equal(r.valid, true, JSON.stringify(r.errors));
+  const local = mod.createBranchCuttingWrap(r, { stationCount: 24 }), ticks = local.references.filter(ref => ref.type === 'tick');
+  assert.equal(ticks.length, 25);
+  assert.equal(ticks.filter(ref => ref.label).length, 5); // quarter-turn labels, including the closing row
+  const exact = kernel.computeExactStationTable(r, 24);
+  local.mapping.stations.forEach((row, i) => {
+    assert.ok(Math.abs(row.outerDepth - exact[i].outerDepth) < 1e-10);
+    assert.ok(Math.abs(row.innerDepth - exact[i].innerDepth) < 1e-10);
+  });
+  const svg = mod.templateSVG(local);
+  assert.ok(svg.includes('角度正向 ←'));
+  assert.ok(svg.includes('0° 接縫'));
+  assert.ok(svg.includes('360° 同縫'));
+  assert.ok(svg.includes('data-calibration="horizontal-100mm"'));
+  assert.ok(svg.includes('data-calibration="vertical-100mm"'));
+});
 console.log(`${checks} export checks passed.`);
