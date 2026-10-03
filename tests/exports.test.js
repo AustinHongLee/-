@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
-// Import through a data URL so this test does not require package.json type=module.
-const source = await readFile(process.env.PIPE_EXPORTS_TEST_SOURCE ?? new URL('../dist/assets/exports.js', import.meta.url), 'utf8');
-const mod = await import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}`);
+import { pathToFileURL } from 'node:url';
+// Use a file URL so the exporter can resolve its process-planning dependency.
+const mod = await import(process.env.PIPE_EXPORTS_TEST_SOURCE ? pathToFileURL(process.env.PIPE_EXPORTS_TEST_SOURCE) : new URL('../dist/assets/exports.js', import.meta.url));
 const params = { mainOD: 324, mainWall: 8, mainLength: 1000, jointPosition: 500, branchOD: 168, branchWall: 6,
   branchLength: 450, angle: 60, azimuth: 15, offset: 0, jointType: 'in', projection: 0,
   rootGap: 1, holeGap: 2, padEnabled: true, padShape: 'circle', padSplit: 'axial', padThickness: 6,

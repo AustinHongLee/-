@@ -1,6 +1,7 @@
 /** Pipe fabrication exports. All geometry is measured in millimetres.
  * No drawing operation changes the size or shape of a supplied contour.
  */
+import { validateFabricationPlan, reconcileFitRecords, machiningBudget, fitPointStatus, fitPhaseStatus, createRoughCutTemplate } from './fabrication-plan.js';
 export const PROJECT_FORMAT = 'pipe-fabrication-project';
 export const PROJECT_VERSION = 1;
 
@@ -123,7 +124,7 @@ function geometryMarkup(t, options = {}) {
   if (keep) output += `<path d="${t.materialOutline ? pathD(t.materialOutline) : compound}" fill="#f4f4f4" fill-rule="evenodd" stroke="none"/>`;
   output += glueMarkup(t);
   output += `<path d="${outerPath}"${paperBoundary(t) ? ' data-layer="PAPER_BOUNDARY" stroke-width="0.18" stroke-dasharray="1 1"' : ''}/><g data-layer="CUT_HOLE">${t.holes.map(h => `<path d="${pathD(h)}"/>`).join('')}</g>`;
-  output += `<g data-layer="DATUM" stroke-width="0.2">${t.references.map(r => `<path d="${pathD(r.points, r.closed && r.type !== 'cut-line')}"${r.type === 'cut-line' ? ' data-layer="CUT_FISHMOUTH" stroke-width=".4"' : ` stroke-dasharray="${r.type === 'tick' ? 'none' : r.type === 'seam' || r.type === 'fold' || r.type === 'inner-edge' ? '2 1' : r.type === 'outer-edge' ? '1 1' : '6 1 1 1'}"`}/>${r.arrow ? arrowTip(r.points) : ''}<text x="${fmt(r.labelPosition?.[0] ?? r.points[0][0] + 1)}" y="${fmt(r.labelPosition?.[1] ?? r.points[0][1] + 3)}" text-anchor="${r.textAnchor}" fill="#000" stroke="none" font-size="2.4">${xmlText(r.label)}</text>`).join('')}</g>`;
+  output += `<g data-layer="DATUM" stroke-width="0.2">${t.references.map(r => `<path d="${pathD(r.points, r.closed && r.type !== 'cut-line')}"${r.type === 'cut-line' ? ' data-layer="CUT_FISHMOUTH" stroke-width=".4"' : r.type === 'rough-cut' ? ' data-layer="ROUGH_CUT" stroke-width=".45" stroke-dasharray="3 1"' : r.type === 'tack-reference' ? ' data-layer="TACK_REFERENCE" stroke-width=".35"' : ` stroke-dasharray="${r.type === 'tick' ? 'none' : r.type === 'seam' || r.type === 'fold' || r.type === 'inner-edge' ? '2 1' : r.type === 'outer-edge' ? '1 1' : '6 1 1 1'}"`}/>${r.arrow ? arrowTip(r.points) : ''}<text x="${fmt(r.labelPosition?.[0] ?? r.points[0][0] + 1)}" y="${fmt(r.labelPosition?.[1] ?? r.points[0][1] + 3)}" text-anchor="${r.textAnchor}" fill="#000" stroke="none" font-size="2.4">${xmlText(r.label)}</text>`).join('')}</g>`;
   output += `<g data-layer="REMOVE_MARK" stroke-width="0.3">${t.holes.map(h => crossesAt(centroid(h))).join('')}</g></g>`;
   if ((t.id === 'branch' || t.mapping?.coordinateSystem === 'branch-outer-wrap') && t.mapping?.paperTransform !== 'branch-mirror-x') {
     output += `<g data-layer="ANGLE_MARK" fill="#000" font-size="2.4"><text x="1" y="3">0° 起縫</text><text x="${fmt(t.width - 31)}" y="3">360° 同起縫</text><text x="${fmt(t.width / 2)}" y="5" text-anchor="middle">圓周弧長 →</text></g>`;
@@ -206,8 +207,8 @@ export function templateDXF(template, options = {}) {
   pair(0, 'SECTION'); pair(2, 'HEADER'); pair(9, '$ACADVER'); pair(1, 'AC1015');
   pair(9, '$INSUNITS'); pair(70, 4); pair(9, '$MEASUREMENT'); pair(70, 1); pair(9, '$LUNITS'); pair(70, 2);
   if (options.id !== undefined) { pair(999, `JOINT_ID=${encodeURIComponent(String(options.id))}`); pair(999, `REVISION=${encodeURIComponent(String(options.revision ?? 'A'))}`); }
-  pair(0, 'ENDSEC'); pair(0, 'SECTION'); pair(2, 'TABLES'); pair(0, 'TABLE'); pair(2, 'LAYER'); pair(70, 7);
-  for (const [name, colour] of [['CUT_OUTER', 7], ['CUT_HOLE', 1], ['DATUM', 3], ['SEAM', 5], ['FOLD', 6], ['PAPER_BOUNDARY', 8], ['CUT_FISHMOUTH', 1]]) {
+  pair(0, 'ENDSEC'); pair(0, 'SECTION'); pair(2, 'TABLES'); pair(0, 'TABLE'); pair(2, 'LAYER'); pair(70, 9);
+  for (const [name, colour] of [['CUT_OUTER', 7], ['CUT_HOLE', 1], ['DATUM', 3], ['SEAM', 5], ['FOLD', 6], ['PAPER_BOUNDARY', 8], ['CUT_FISHMOUTH', 1], ['ROUGH_CUT', 2], ['TACK_REFERENCE', 4]]) {
     pair(0, 'LAYER'); pair(2, name); pair(70, 0); pair(62, colour); pair(6, 'CONTINUOUS');
   }
   pair(0, 'ENDTAB'); pair(0, 'ENDSEC'); pair(0, 'SECTION'); pair(2, 'ENTITIES');
@@ -219,7 +220,7 @@ export function templateDXF(template, options = {}) {
   writePolyline(t.outer, paperBoundary(t) ? 'PAPER_BOUNDARY' : 'CUT_OUTER', true);
   for (const hole of t.holes) writePolyline(hole, 'CUT_HOLE', true);
   for (const r of t.references) writePolyline(r.closed && r.type !== 'cut-line' ? pathPoints(r.points, '閉合參考線') : r.points,
-    r.type === 'cut-line' ? 'CUT_FISHMOUTH' : r.type === 'seam' ? 'SEAM' : r.type === 'fold' ? 'FOLD' : 'DATUM', r.type !== 'cut-line' && r.closed);
+    r.type === 'cut-line' ? 'CUT_FISHMOUTH' : r.type === 'rough-cut' ? 'ROUGH_CUT' : r.type === 'tack-reference' ? 'TACK_REFERENCE' : r.type === 'seam' ? 'SEAM' : r.type === 'fold' ? 'FOLD' : 'DATUM', !['cut-line','rough-cut'].includes(r.type) && r.closed);
   pair(0, 'ENDSEC'); pair(0, 'EOF');
   return chunks.join('\r\n') + '\r\n';
 }
@@ -300,17 +301,17 @@ function cleanMetadata(metadata = {}) {
   }
   return clean;
 }
-export function projectJSON(params, metadata = {}) {
-  return JSON.stringify({ format: PROJECT_FORMAT, version: PROJECT_VERSION, params: validateProjectParams(params), metadata: cleanMetadata(metadata) }, null, 2);
+export function projectJSON(params, metadata = {}, fabrication) {
+  return JSON.stringify({ format: PROJECT_FORMAT, version: fabrication===undefined?PROJECT_VERSION:2, params: validateProjectParams(params), metadata: cleanMetadata(metadata), ...(fabrication===undefined?{}:{fabrication:validateFabricationPlan(fabrication)}) }, null, 2);
 }
 export function readProjectJSON(text) {
   if (typeof text !== 'string' || text.length > 200000) throw new Error('專案檔格式不正確或超出 200 KB 上限。');
   let data;
   try { data = JSON.parse(text.replace(/^\uFEFF/, '')); } catch { throw new Error('無法讀取 JSON 專案檔。'); }
-  if (!plainObject(data) || Object.keys(data).some(key => !['format', 'version', 'params', 'metadata'].includes(key)))
+  if (!plainObject(data) || Object.keys(data).some(key => !['format', 'version', 'params', 'metadata','fabrication'].includes(key)))
     throw new Error('專案檔結構不正確。');
-  if (data.format !== PROJECT_FORMAT || data.version !== PROJECT_VERSION) throw new Error('不支援此專案格式或版本。');
-  return { format: PROJECT_FORMAT, version: PROJECT_VERSION, params: validateProjectParams(data.params), metadata: cleanMetadata(data.metadata ?? {}) };
+  if (data.format !== PROJECT_FORMAT || ![PROJECT_VERSION,2].includes(data.version) || (data.version===2)!==Object.hasOwn(data,'fabrication')) throw new Error('不支援此專案格式或版本。');
+  return { format: PROJECT_FORMAT, version: data.version, params: validateProjectParams(data.params), metadata: cleanMetadata(data.metadata ?? {}), ...(data.version===2?{fabrication:validateFabricationPlan(data.fabrication)}:{}) };
 }
 
 function paperSetup(options) {
@@ -597,6 +598,23 @@ function reportStations(result, options) {
   return rows;
 }
 
+// Preserve explicit line breaks and bound printed process-note height.
+function processNoteSheets(plan,paper){
+  if(!plan||!(plan.weldNote||plan.disposition))return [];
+  const capacity=Math.max(10,Math.floor((paper.contentH-65)/5.2)),sheets=[];
+  let sheet=[],used=0;
+  for(const [label,text] of [['焊道尺寸、點固及焊接順序',plan.weldNote||'尚未記錄。'],['修整／修復工藝與重測處置',plan.disposition||'尚未記錄。']]){
+    const lines=text.replace(/\r\n?/g,'\n').split('\n').flatMap(line=>svgTextLines(line,paper.contentW-10,3.2));
+    let offset=0;
+    while(offset<lines.length){
+      if(capacity-used<=3){sheets.push(sheet);sheet=[];used=0;}
+      const count=Math.min(lines.length-offset,capacity-used-3);
+      sheet.push({label:label+(offset?'（續）':''),text:lines.slice(offset,offset+count).join('\n')});used+=count+3;offset+=count;
+    }
+  }
+  if(sheet.length)sheets.push(sheet);return sheets;
+}
+
 /** Exposed for the UI: the exact same plan is used by the report renderer. */
 export function reportPagePlan(result, options = {}) {
   assertValidResult(result);
@@ -608,9 +626,11 @@ export function reportPagePlan(result, options = {}) {
   const requested = options.parts === undefined ? null : new Set(options.parts);
   if (requested?.size === 0) throw new Error('請至少選擇一個製作零件。');
   if (requested && [...requested].some(id => !result.templates.some(t => t.id === id))) throw new Error('所選零件不在目前模型中。');
+  const fabrication=options.fabrication===undefined?null:reconcileFitRecords(options.fabrication,result.params).plan;
   const selected = result.templates.filter(t => requested === null ? !['main-local', 'branch-local'].includes(t.id) : requested.has(t.id)).map(t => {
     if (t.id === 'main' && options.mainPattern === 'local') return cleanTemplate({ ...createMainOpeningPatch(result, { margin: options.localMargin ?? 25 }), id: 'main' });
     if (t.id === 'branch' && options.branchPattern === 'local') return cleanTemplate({ ...createBranchCuttingWrap(result, { tab: options.branchTab ?? 15, margin: options.branchMargin ?? 10, stationCount: options.stationCount ?? 24 }), id: 'branch' });
+    if (t.id === 'branch-rough' && fabrication) return cleanTemplate(createRoughCutTemplate(createBranchCuttingWrap(result),fabrication));
     return cleanTemplate(fieldTemplate(t, result));
   });
   const parts = selected.map(t => {
@@ -640,10 +660,14 @@ export function reportPagePlan(result, options = {}) {
     }
     if (sheet.length) noteSheets.push(sheet);
   }
+  const fitCapacity=paper.paper==='A4'?(paper.orientation==='landscape'?10:18):(paper.orientation==='landscape'?18:24);
+  const fitSheets=fabrication?Array.from({length:Math.ceil(fabrication.count/fitCapacity)},(_,i)=>Array.from({length:Math.min(fitCapacity,fabrication.count-i*fitCapacity)},(_,j)=>i*fitCapacity+j)):[];
+  const processNotes=processNoteSheets(fabrication,paper),processNotePages=processNotes.length;
+  const fabricationPages=fabrication?1+fitSheets.length+processNotePages:0;
   const coverPages = 2, overviewPages = options.includeOverview ? parts.length : 0;
-  const totalPages = coverPages + noteSheets.length + stationSheets.length + overviewPages + parts.reduce((sum, part) => sum + part.pageCount, 0);
+  const totalPages = coverPages + fabricationPages + noteSheets.length + stationSheets.length + overviewPages + parts.reduce((sum, part) => sum + part.pageCount, 0);
   if (totalPages > 1000) throw new Error('圖面超過 1,000 頁，請改用較大紙張或 DXF 匯出。');
-  return { paper, parts, coverPages, overviewPages, notePages: noteSheets.length, noteSheets, stationPages: stationSheets.length, stationRowCount: stationRows.length, stationSheets, totalPages };
+  return { paper, parts, coverPages, overviewPages, fabrication, fabricationPages, processNotePages, processNotes, fitSheets, notePages: noteSheets.length, noteSheets, stationPages: stationSheets.length, stationRowCount: stationRows.length, stationSheets, totalPages };
 }
 export function estimateReportPages(result, options = {}) { return reportPagePlan(result, options).totalPages; }
 
@@ -667,6 +691,7 @@ function templateAxes(template) {
   return 'X→主管軸向；U↓主管周向';
 }
 function templateLegend(t) {
+  if (t.id==='branch-rough') return '粗實線＝成品外緣；長虛線 ROUGH_CUT＝粗切留料線；短虛線＝內緣；細點框只裁紙；T＝點固參考母線';
   if (t.mapping?.paperTransform === 'branch-mirror-x') return '粗實線＝魚口金屬切線；細點框只裁紙；斜線區＝貼合舌；內緣虛線供修磨';
   if (t.id === 'main' || t.id === 'main-local') return '孔口實線＝金屬切線；細點框只裁紙；×＝孔口切除；十字只作定位';
   return '實線＝金屬輪廓；點劃線＝基準；虛線＝分片對合／內緣；×＝孔口切除';
@@ -767,6 +792,13 @@ ${notes.length ? `<h2>製作備註</h2><ul>${notes.map(n => `<li>${xmlText(n)}</
 ${meta.notes ? `<p>${xmlText(meta.notes)}</p>` : ''}
 <div class="note"><strong>驗證範圍與方向</strong><p>本報告驗證模型幾何、全板厚開孔基準及展開尺寸。未進行承壓設計、補強有效面積、焊接強度、疲勞或材料合格判定；幾何吻合不代表承壓補強合格。</p><p>由主管基準端看向另一端，主管周向弧長沿逆時針增加；先按接頭方位建立背面起縫。支管由自由直端面朝接頭看，角度沿順時針增加；0° 位於通過支管軸線且平行主管軸線的平面，徑向朝主管基準端；偏心接頭兩條實際軸線未必共面。</p><p>灰區保留，孔內×切除；裁紙邊、貼合舌、定位十字與拼接線不得當金屬切線。刀縫、坡口、回彈與修配餘量需依製程核對。</p></div></div></div>`, 'verification-page');
   plan.noteSheets.forEach((notes, index) => page(`<header><h1>紙樣定位與現場操作 · ${index + 1}／${plan.notePages}</h1><p>${xmlText(metaLine)}</p></header><p>先以 100% 列印並核對雙方向 100 mm 校正尺，再拼接、建立管件基準與貼合紙樣。</p><ul class="field-notes">${notes.map(note => `<li>${xmlText(note)}</li>`).join('')}</ul><div class="note">各樣板定位值以 mm 表示。先核對接頭編號、版次、內插／外貼與實際管徑；紙樣貼合後先劃線與試組，再依核准工法裁切修磨。</div>`, 'field-notes-page'));
+  if(plan.fabrication){
+    const f=plan.fabrication,b=machiningBudget(f),show=v=>v===null?'未設定':typeof v==='number'?fmt(v,4):String(v),row=(label,v)=>`<tr><th>${xmlText(label)}</th><td>${xmlText(show(v))}</td></tr>`;
+    const pre=fitPhaseStatus(f),post=fitPhaseStatus(f,'post'),tool={grinder:'砂輪機',saw:'鋸切',plasma:'電漿',other:'其他'}[f.tool];
+    page(`<header><h1>加工留料與焊接工藝記錄</h1><p>${xmlText(metaLine)}</p></header><div class="parameter-grid"><div><table>${row('加工工具',tool)}${row('粗切沿軸留料 mm',f.stock)}${row('標線沿軸偏差 ±mm',f.markError)}${row('切磨沿軸偏差 ±mm',f.cutError)}${row('實測切縫寬度 mm',f.kerf)}${row('坡口單邊角 °（記錄）',f.bevelAngle)}${row('鈍邊 mm（記錄）',f.rootFace)}</table></div><div><table>${row('WPS／工法編號與版次',f.wpsId||'未設定')}${row('根隙量測方向／位置',f.gapBasis||'未設定')}${row('根隙下限 mm',f.gapMin)}${row('根隙上限 mm',f.gapMax)}${row('切口狀況',{unknown:'尚未檢查',checked:'已核對切口與量測基準',damaged:'需處置'}[f.edgeCondition])}${row('點固參考母線',f.tackAngles.length?f.tackAngles.map(a=>a+'°').join('、'):'未指定')}</table></div></div><div class="note"><strong>加工與試配狀態</strong><p>${b.known?`沿軸最不利剩餘留料 ${fmt(b.remaining)} mm = ${fmt(f.stock)} − ${fmt(f.markError)} − ${fmt(f.cutError)}。${b.remaining<0?'估計偏差大於留料，請調整。':''}`:'沿軸留料估算尚未設定完整。'} 這是輸入偏差的算術估計，不能當作焊接根隙、紙樣誤差或加工保證。</p><p>試配：${xmlText(pre.label)}，已填 ${pre.measured}/${pre.total} 點。點固後：${xmlText(post.label)}，已填 ${post.measured}/${post.total} 點。</p></div><div class="note"><strong>製作順序</strong><ol><li>核對材質、尺寸與工藝單，校正紙樣後標線。</li><li>${f.stock===null?'粗切留料未設定，請先制定留料計畫；本報告只提供成品線。':'粗切依 ROUGH_CUT 長虛線，切縫留在廢料側；逐點保留內外成品緣所需材料。'}</li><li>分別修磨至內外成品緣，按工法準備坡口與鈍邊；本圖未生成坡口加工曲面。</li><li>試配量測根隙與切口狀況；依工藝單點固，再重新量測。</li><li>超限先重新配合或按核准修復工藝處置，完成後重測；本紀錄不決定焊接尺寸或順序。</li></ol></div>`, 'process-page');
+    plan.processNotes.forEach((sheet,index)=>page(`<header><h1>焊接工藝與處置紀錄 · ${index+1}/${plan.processNotePages}</h1><p>${xmlText(metaLine)}</p></header>${sheet.map(entry=>`<h2>${xmlText(entry.label)}</h2><p class="process-text">${xmlText(entry.text)}</p>`).join('')}<div class="note">處置文字不會改變超限實測值的狀態。焊接可接受範圍由適用工藝單與核准要求決定；成品幾何間隙、刀具誤差與焊接根隙分別核對。</div>`, 'process-page'));
+    plan.fitSheets.forEach((indices,index)=>page(`<header><h1>試配與點固後根隙紀錄 · ${index+1}/${plan.fitSheets.length}</h1><p>${xmlText(metaLine)}</p></header><p>工法 ${xmlText(f.wpsId||'未設定')}；根隙 ${xmlText(show(f.gapMin))}–${xmlText(show(f.gapMax))} mm。量測方向／位置：${xmlText(f.gapBasis||'未設定')}。</p><table class="fit-record-table"><thead><tr><th>分點</th><th>角度 °</th><th>試配根隙 mm</th><th>點固後 mm</th><th>點固參考</th><th>試配／點固後狀態</th></tr></thead><tbody>${indices.map(i=>`<tr><td>P${i+1}</td><td>${i*360/f.count}</td><td>${f.preGaps[i]===null?'____':fmt(f.preGaps[i],4)}</td><td>${f.postGaps[i]===null?'____':fmt(f.postGaps[i],4)}</td><td>${f.tackAngles.includes(i*360/f.count)?'T'+(i+1):'—'}</td><td>${xmlText(fitPointStatus(f,i).label)}<br>${xmlText(fitPointStatus(f,i,'post').label)}</td></tr>`).join('')}</tbody></table><div class="note">分點由支管自由端朝接頭看，從 0° 母線沿順時針增加。T 只表示點固參考位置，不決定焊接順序。空白為未量測；填入分點在範圍內仍需按工法檢查全周。改尺寸或建立下一支接頭時，舊實測紀錄不可沿用。</div>`, 'fit-record-page'));
+  }
   plan.stationSheets.forEach((sheet, index) => {
     const rows = sheet.rows.map((station, i) => {
       const closing = Math.abs(station.angle - 360) < 1e-7;
@@ -805,6 +837,7 @@ table { width: 100%; border-collapse: collapse; font-size: 2.7mm; } th, td { bor
 .note { border: .3mm solid #000; padding: 2.5mm; margin-top: 4mm; font-size: 2.6mm; } ul { margin: 1mm 0; padding-left: 5mm; font-size: 2.6mm; } footer { position: absolute; left: ${p.margin}mm; right: ${p.margin}mm; bottom: 5mm; border-top: .2mm solid #000; padding-top: 1mm; font-size: 2.3mm; } footer span { float: right; }
 .verification-columns { display: grid; grid-template-columns: 1fr 1fr; gap: 5mm; } .verification-page h2 { margin-top: 2mm; } .verification-page .note { margin-top: 2mm; } .verification-page td { overflow-wrap: anywhere; } ${p.orientation === 'landscape' ? '.verification-page table, .verification-page ul, .verification-page .note { font-size: 2.8mm; } .cover table { font-size: 2.5mm; } .cover th, .cover td { padding: .8mm 1.2mm; } .cover .quick-steps { line-height: 1.35; font-size: 2.5mm; }' : ''}
 .quick-steps ol { margin: 1mm 0 0; padding-left: 5mm; font-size: inherit; }
+.process-page th,.process-page td {overflow-wrap:anywhere;} .process-page .note ol {margin:1mm 0;padding-left:5mm;} .process-text{white-space:pre-wrap;overflow-wrap:anywhere;font-size:3mm;line-height:1.7;} .fit-record-table td{font-size:2.6mm;padding:1.5mm;}
 .field-notes { font-size: 3mm; line-height: 1.65; } .field-notes li { margin-bottom: 3mm; }
 .station-table { margin-top: 3mm; font-size: 2.7mm; } .station-table td { text-align: right; font-variant-numeric: tabular-nums; } .station-table td:first-child { text-align: center; } .station-note { margin-top: 3mm; }
 .assembly-preview { height: ${p.orientation === 'landscape' ? 22 : 38}mm; margin-top: 3mm; text-align: center; overflow: hidden; } .assembly-preview svg { max-width: 100%; height: 100%; }
