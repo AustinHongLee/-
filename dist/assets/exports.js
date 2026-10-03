@@ -477,5 +477,9 @@ export function openPrintReport(html, filename = '配管製作報告.html') {
   if (!reportWindow) { downloadText(html, filename, 'text/html;charset=utf-8'); return { opened: false, downloaded: true }; }
   reportWindow.opener = null;
   reportWindow.document.open(); reportWindow.document.write(html); reportWindow.document.close();
+  // A blank window can inherit the parent CSP; bind through trusted code so
+  // printing still works if an inline onclick attribute is disallowed.
+  const printButton = reportWindow.document.querySelector('.print-controls button');
+  if (printButton) printButton.onclick = () => reportWindow.print();
   return { opened: true, downloaded: false };
 }
