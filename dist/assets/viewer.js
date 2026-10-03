@@ -82,6 +82,7 @@ export class JointViewer {
   resize() {
     if(!this.renderer)return;
     const {width,height}=this.container.getBoundingClientRect();
+    if(width<=0||height<=0)return;
     this.renderer.setSize(width,height,false);this.camera.aspect=width/Math.max(1,height);this.camera.updateProjectionMatrix();this.render();
   }
   material(color) {return new THREE.MeshStandardMaterial({color,roughness:.48,metalness:.35,side:THREE.DoubleSide});}
@@ -157,6 +158,7 @@ export class JointViewer {
   setLayer(name,value) {if(this.parts[name]){this.parts[name].visible=value;this.render();}}
   fit(view=this.view) {
     if(!this.result?.valid||!this.available)return;
+    this.resize();
     this.view=view;
     const box=new THREE.Box3().setFromObject(this.model),center=box.getCenter(new THREE.Vector3()),size=box.getSize(new THREE.Vector3());
     const dir=view==='front'?new THREE.Vector3(0,-1,.04):view==='side'?new THREE.Vector3(1,0,.04):new THREE.Vector3(1,-1.5,1.1).normalize();

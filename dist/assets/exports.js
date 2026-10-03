@@ -371,7 +371,7 @@ export function createMainOpeningPatch(result, options = {}) {
   const margin = options.margin ?? 25;
   finite(margin, '局部紙樣留邊');
   if (margin < 5 || margin > 500) throw new Error('局部紙樣留邊須介於 5 與 500 mm。');
-  const points = t.holes.flat();
+  const points = [...t.holes.flat(),...t.references.filter(r=>r.type==='inner-edge').flatMap(r=>r.points)];
   const hole = { minX: Math.min(...points.map(p => p[0])), maxX: Math.max(...points.map(p => p[0])),
     minY: Math.min(...points.map(p => p[1])), maxY: Math.max(...points.map(p => p[1])) };
   const stock = { minX: Math.min(...t.outer.map(p => p[0])), maxX: Math.max(...t.outer.map(p => p[0])),
@@ -450,8 +450,10 @@ function branchPaper(template, result, options, local) {
   if (![12, 24, 36, 72].includes(stationCount)) throw new Error('纸樣分點須為 12、24、36 或 72。');
   const all = [...source.outer, ...source.inner], minOuter = Math.min(...source.outer.map(p => p[1]));
   const minDepth = Math.min(...all.map(p => p[1])), maxDepth = Math.max(...all.map(p => p[1]));
-  const top = local ? minDepth - margin : Math.min(0, minDepth), height = maxDepth - top + (local ? margin : 0), width = c + tab;
-  const datumY = local ? minOuter - top : -top, originalDepthOrigin = local ? minOuter : 0;
+  if(options.datumStep!==undefined&&(!Number.isFinite(options.datumStep)||options.datumStep<=0||options.datumStep>10))throw new Error('定位環分度須大於 0 且不超過 10 mm。');
+  const originalDepthOrigin = local ? options.datumStep?Math.floor((minDepth+1e-9)/options.datumStep)*options.datumStep:minOuter : 0;
+  const top = local ? Math.min(minDepth,originalDepthOrigin) - margin : Math.min(0, minDepth), height = maxDepth - top + (local ? margin : 0), width = c + tab;
+  const datumY = local ? originalDepthOrigin - top : -top;
   const move = p => [c - p[0], p[1] - top];
   const outerCut = source.outer.map(move), innerEdge = source.inner.map(move);
   const references = [
@@ -459,7 +461,7 @@ function branchPaper(template, result, options, local) {
     ...(innerEdge.length > 1 ? [{ points: innerEdge, label: '', type: 'inner-edge', closed: false }] : []),
     { points: [[c, 0], [c, height]], label: c < 120 ? '0° 接縫' : '0° 接縫／貼合舌起點', type: 'seam', labelPosition: [c - 2, height - 3], textAnchor: 'end' },
     { points: [[0, 0], [0, height]], label: c < 120 ? '360° 同縫' : '360°＝0° 同一母線', type: 'seam', labelPosition: [2, height - 3] },
-    { points: [[0, datumY], [c, datumY]], label: local ? `${c < 120 ? '定位環：直端 +' : '定位環線：距自由直端 '}${fmt(minOuter, 6)} mm` : '自由直端面 · 深度 0 mm', type: 'datum', labelPosition: [c < 120 ? 2 : c / 2, Math.min(height - 2, datumY + 3)], textAnchor: c < 120 ? 'start' : 'end' },
+    { points: [[0, datumY], [c, datumY]], label: local ? `${c < 120 ? '定位環：直端 +' : '定位環線：距自由直端 '}${fmt(originalDepthOrigin, 6)} mm` : '自由直端面 · 深度 0 mm', type: 'datum', labelPosition: [c < 120 ? 2 : c / 2, Math.min(height - 2, datumY + 3)], textAnchor: c < 120 ? 'start' : 'end' },
   ];
   const tickY = local ? datumY : Math.min(14, height / 3);
   const labelCount = [stationCount, 12, 4, 2].find(count => c / count >= 8) ?? 2;
@@ -480,7 +482,7 @@ function branchPaper(template, result, options, local) {
   const notes = [
     '文字面朝外包覆：0° 在紙樣右側，360° 在左側；兩側是同一母線。由自由直端看向接頭，角度正向為順時針，紙上角度往左增加。',
     `支管實際外徑周長 ${fmt(c, 6)} mm；右側 ${fmt(tab)} mm 斜線區只作貼合舌，覆在左側 0–${fmt(tab)} mm 紙區。細點矩形只裁紙，粗實線 CUT_FISHMOUTH 才切管材，內緣虛線只供壁厚修磨。`,
-    ...(local ? [`先由自由直端面沿管軸量 ${fmt(minOuter, 6)} mm 畫定位環線，對準紙樣定位環線；紙樣只截取口部，並未把切口重新當成深度零。${top < 0 ? `紙樣上緣需凸出直端 ${fmt(-top, 6)} mm，可修掉空白，但不可移動定位環線。` : `紙樣上緣距自由直端 ${fmt(top, 6)} mm。`}`] : [top < 0 ? `紙樣深度 0 定位線對準自由直端面，紙緣凸出直端 ${fmt(-top, 6)} mm；所有內外緣共用原直端基準。` : '紙樣上緣對準自由直端面；所有外緣、內緣深度共用這個直端基準。']),
+    ...(local ? [`先由自由直端面沿管軸量 ${fmt(originalDepthOrigin, 6)} mm 畫定位環線，對準紙樣定位環線；紙樣只截取口部，並未把切口重新當成深度零。${top < 0 ? `紙樣上緣需凸出直端 ${fmt(-top, 6)} mm，可修掉空白，但不可移動定位環線。` : `紙樣上緣距自由直端 ${fmt(top, 6)} mm。`}`] : [top < 0 ? `紙樣深度 0 定位線對準自由直端面，紙緣凸出直端 ${fmt(-top, 6)} mm；所有內外緣共用原直端基準。` : '紙樣上緣對準自由直端面；所有外緣、內緣深度共用這個直端基準。']),
     '0° 母線位於通過支管軸線且平行主管軸線的平面，徑向朝主管基準端的一側；有偏心時兩條實際軸線未必共面。',
   ];
   return { ...template, id: local ? 'branch-local' : 'branch', title: local ? '支管口部短包覆紙樣' : '支管整長包覆紙樣',
@@ -743,7 +745,7 @@ function tileMarkup(t, tile, part, setup, uid) {
 <defs><clipPath id="clip-${uid}"><rect x="0" y="0" width="${tileW}" height="${tileH}"/></clipPath></defs>
 <g clip-path="url(#clip-${uid})"><g transform="translate(${fmt(-tile.x, 6)},${fmt(-tile.y, 6)})" data-scale="1mm-per-svg-unit">${geometryMarkup(t)}</g></g>
 <rect x="0.15" y="0.15" width="${tileW - 0.3}" height="${tileH - 0.3}" stroke="#000" stroke-width="0.2" fill="none"/>
-<g data-layer="ASSEMBLY_GUIDE">${seams}<g stroke="#000" stroke-width="0.18" fill="#fff">${registration}</g></g>
+<g data-layer="ASSEMBLY_GUIDE">${seams}<g stroke="#000" stroke-width="0.18" fill="none">${registration}</g></g>
 ${horizontalRuler(4, tileH + 3)}${verticalRuler(tileW + 3, 4)}
 <text x="116" y="${tileH + 7}" font-size="2.3">${xmlText(neighbor)}</text>
 <text x="116" y="${tileH + 11}" font-size="2.3">拼接重疊 ${overlap} mm · 細點線為拼接導引</text>
@@ -848,6 +850,78 @@ table { width: 100%; border-collapse: collapse; font-size: 2.7mm; } th, td { bor
 }
 
 /** Downloads UTF-8 content. Use directly from an explicit user action. */
+export function paperPatternPlan(result, options = {}) {
+  assertValidResult(result);
+  if ((options.orientation ?? 'auto') === 'auto') {
+    const plans = ['landscape','portrait'].map(orientation => paperPatternPlan(result,{...options,orientation}));
+    return plans.sort((a,b)=>a.paperPages-b.paperPages)[0];
+  }
+  const paper=paperSetup({...options,margin:options.margin??10});
+  // Compact header 14 mm + rulers 16 mm + three legend lines and footer clearance.
+  paper.tileH=paper.contentH-46;
+  const fabrication=options.fabrication===undefined?null:reconcileFitRecords(options.fabrication,result.params).plan;
+  const requested=options.parts??['branch-local'];
+  if(!Array.isArray(requested)||!requested.length)throw new Error('請選擇要印的零件。');
+  const ids=[...new Set(requested)];
+  const selected=ids.map(id=>{
+    if(['branch','branch-local','branch-rough'].includes(id)){
+      const base=createBranchCuttingWrap(result,{datumStep:1,stationCount:12});
+      if(id==='branch-rough'){
+        if(!fabrication||fabrication.stock===null)throw new Error('請先設定粗切留料，再印粗切樣帶。');
+        return cleanTemplate(createRoughCutTemplate(base,fabrication));
+      }
+      return cleanTemplate(base);
+    }
+    if(['main','main-local'].includes(id))return cleanTemplate(createMainOpeningPatch(result));
+    const source=result.templates.find(t=>t.id===id);
+    if(!source||!id.startsWith('pad'))throw new Error('所選紙樣已不在目前模型中。');
+    return cleanTemplate(fieldTemplate(source,result));
+  });
+  const parts=selected.map((template,index)=>{
+    const xs=axisTiles(template.bounds.width+4,paper.tileW,paper.overlap),ys=axisTiles(template.bounds.height+4,paper.tileH,paper.overlap);
+    return {template,prefix:template.id.startsWith('branch')?'B':template.id.startsWith('main')?'M':template.id==='pad'?'P':`P${template.id.split('-')[1]}-`,columns:xs.length,rows:ys.length,pageCount:xs.length*ys.length,
+      tiles:ys.flatMap((y,row)=>xs.map((x,column)=>({row:row+1,column:column+1,x:template.bounds.minX-2+x,y:template.bounds.minY-2+y,width:paper.tileW,height:paper.tileH}))) };
+  });
+  const paperPages=parts.reduce((n,p)=>n+p.pageCount,0),guidePages=options.includeGuide===true?1:0,totalPages=paperPages+guidePages;
+  if(totalPages>1000)throw new Error('紙樣超過 1,000 張，請改大紙張或匯出 DXF。');
+  return {paper,parts,paperPages,guidePages,totalPages};
+}
+
+export function paperPositionRecipe(template) {
+  const m=template.mapping??{};
+  if(m.localCuttingWrap)return `從支管自由直端量 ${fmt(m.originalDepthOrigin)} mm 畫一圈，對準紙樣「定位環線」。0° 母線朝主管基準端；文字面朝外，右側 0° 與左側 360° 貼回同一母線。`;
+  if(m.positioning?.A&&m.positioning?.B){const {A,B}=m.positioning;return `先找主管基準端與背面 0° 起縫。A：距基準端 ${fmt(A.axial,2)} mm、周向 ${fmt(A.arc,2)} mm；B：距基準端 ${fmt(B.axial,2)} mm、周向 ${fmt(B.arc,2)} mm。由基準端看向另一端，沿逆時針量周向，對準 A／B 十字。`}
+  return m.paperAxes==='u-x'&&template.basis?.includes('外表面')?'文字朝外貼在已彎補強板外表面，對準主管軸向與起縫；孔口沿指定板厚法線加工。':'此為平板下料紙樣。對準板材軸向，先切平板再捲彎；成形後核對孔口內外緣。';
+}
+function tileCode(part,tile){return `${part.prefix}${(tile.row-1)*part.columns+tile.column}`;}
+export function paperTileRegistration(part,tile,setup){
+  const {tileW:W,tileH:H,overlap:o}=setup,marks=[];
+  for(const side of [-1,1]){
+    if(side===-1?tile.column>1:tile.column<part.columns)for(const [i,y] of [20,H-20].entries())marks.push({x:side===-1?o/2:W-o/2,y,key:`V${tile.row}-${side===-1?tile.column-1:tile.column}-${i+1}`});
+    if(side===-1?tile.row>1:tile.row<part.rows)for(const [i,x] of [20,W-20].entries())marks.push({x,y:side===-1?o/2:H-o/2,key:`H${side===-1?tile.row-1:tile.row}-${tile.column}-${i+1}`});
+  }
+  return marks.map(mark=>({...mark,key:`${part.prefix}-${mark.key}`}));
+}
+function compactTileMarkup(part,tile,paper,uid){
+  const {tileW:W,tileH:H,contentW,overlap}=paper,t=part.template;
+  const marks=paperTileRegistration(part,tile,paper);
+  const registrations=marks.map(({x,y,key})=>`<g data-registration="${key}"><path d="M${fmt(x-2)},${fmt(y)}h4M${fmt(x)},${fmt(y-2)}v4"/><circle cx="${fmt(x)}" cy="${fmt(y)}" r="1.3"/><text x="${fmt(x< W/2?x+2:x-2)}" y="${fmt(y+4.5)}" text-anchor="${x<W/2?'start':'end'}" font-size="2.7" stroke="none" fill="#000">${key}</text></g>`).join('');
+  const neighbors=[[-1,0,'左接'],[1,0,'右接'],[0,-1,'上接'],[0,1,'下接']].flatMap(([dc,dr,label])=>{const next=part.tiles.find(t=>t.column===tile.column+dc&&t.row===tile.row+dr);return next?[`${label} ${tileCode(part,next)}`]:[]}).join(' · ')||'單張，不需拼接';
+  return `<svg class="tile-svg" xmlns="http://www.w3.org/2000/svg" width="${contentW}mm" height="${H+16}mm" viewBox="0 0 ${contentW} ${H+16}"><rect width="100%" height="100%" fill="#fff"/><defs><clipPath id="clip-${uid}"><rect width="${W}" height="${H}"/></clipPath></defs><g clip-path="url(#clip-${uid})"><g transform="translate(${fmt(-tile.x,6)},${fmt(-tile.y,6)})" data-scale="1mm-per-svg-unit">${geometryMarkup(t)}</g></g><rect x=".15" y=".15" width="${W-.3}" height="${H-.3}" fill="none" stroke="#000" stroke-width=".2"/><g data-layer="ASSEMBLY_GUIDE" stroke="#000" stroke-width=".18" fill="none">${registrations}</g>${horizontalRuler(4,H+3)}${verticalRuler(W+3,4)}<text x="116" y="${H+7}" font-size="2.8">${xmlText(neighbors)}</text><text x="116" y="${H+12}" font-size="2.6">保留圖形重疊 ${overlap} mm · 對準同號十字</text></svg>`;
+}
+function paperPrintDocument(paper,title,pages){
+  return `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${xmlText(title)}</title><style>@page{size:${paper.width}mm ${paper.height}mm;margin:0}*{box-sizing:border-box}html,body{margin:0;padding:0;color:#000;font:3mm/1.5 "Microsoft JhengHei",Arial,sans-serif}body{background:#e7e7e7}.page{position:relative;width:${paper.width}mm;height:${paper.height}mm;padding:${paper.margin}mm;margin:6mm auto;background:#fff;break-after:page;page-break-after:always}.page:last-child{break-after:auto;page-break-after:auto}h1{font-size:5mm;line-height:1.2;margin:0 0 2mm}h2{font-size:3.7mm;margin:4mm 0 2mm}p{margin:2mm 0}header{margin-bottom:4mm;border-bottom:.35mm solid;padding-bottom:2mm}.tile-header{height:14mm;margin:0;padding:0;border:0;overflow:hidden}.tile-header h1{font-size:4.5mm;margin:0 0 1mm}.tile-header p{font-size:2.8mm;line-height:1.3;margin:0}.tile-svg{display:block;max-width:none}.tile-legend{font-size:2.7mm;margin:1mm 0;line-height:1.25}.guide-layout{display:grid;grid-template-columns:122mm 1fr;gap:6mm;align-items:start}.guide-layout svg{display:block}.guide-steps{margin:0;padding-left:5mm;font-size:3.1mm}.guide-steps li{margin-bottom:3mm}.calibration-box{border:.3mm solid;padding:3mm}.page-map{display:grid;gap:1mm;margin:2mm 0}.page-map span{border:.25mm solid;padding:1mm;text-align:center;font-size:3mm}.recipe{border:.3mm solid;padding:3mm;margin-top:4mm;font-size:3.2mm}.small{font-size:2.7mm}footer{position:absolute;left:${paper.margin}mm;right:${paper.margin}mm;bottom:5mm;border-top:.2mm solid;padding-top:1mm;font-size:2.5mm}footer span{float:right}.print-controls{position:sticky;top:0;z-index:2;text-align:center;background:white;padding:12px;font-size:14px;border-bottom:1px solid}.print-controls button{padding:8px 16px;margin-right:8px;cursor:pointer}@media print{body{background:#fff}.page{margin:0}.print-controls{display:none}*{print-color-adjust:exact;-webkit-print-color-adjust:exact}}</style></head><body><nav class="print-controls"><button onclick="window.print()">列印／儲存 PDF</button><span>${paper.paper} ${paper.orientation==='landscape'?'橫式':'直式'} · 實際尺寸 100% · 關閉頁首頁尾</span></nav>${pages.map((body,i)=>`<section class="page" data-page="${i+1}">${body}${footer(title,i+1,pages.length)}</section>`).join('\n')}</body></html>`;
+}
+export function buildPaperPatternHTML(result,meta={},options={}){
+  const plan=paperPatternPlan(result,options),p=plan.paper,id=String(meta.id??'未編號'),rev=String(meta.revision??'1'),pages=[];
+  if(plan.guidePages){
+    const maps=plan.parts.map(part=>`<div><strong>${xmlText(part.template.id.startsWith('branch')?'支管':part.template.id.startsWith('main')?'主管':part.template.title)}</strong>：${part.rows} 列 × ${part.columns} 欄，共 ${part.pageCount} 張${plan.parts.length===1&&part.rows<=3&&part.columns<=6?`<div class="page-map" style="grid-template-columns:repeat(${part.columns},1fr)">${part.tiles.map(tile=>`<span>${tileCode(part,tile)}</span>`).join('')}</div>`:''}</div>`).join('');
+    pages.push(`<header><h1>先量 100 mm，再拼接貼管</h1><p>接頭 ${xmlText(id)} · 版次 ${xmlText(rev)} · 主管 Ø${fmt(result.params.mainOD)}／支管 Ø${fmt(result.params.branchOD)} mm · ${fmt(result.params.angle)}° · ${xmlText(ENUM_LABELS[result.params.jointType])}</p></header><div class="guide-layout"><div><div class="calibration-box"><strong>水平、垂直都要量到 100 mm</strong><svg xmlns="http://www.w3.org/2000/svg" width="114mm" height="116mm" viewBox="0 0 114 116">${horizontalRuler(4,4)}${verticalRuler(106,8)}<text x="8" y="40" font-size="4">實際尺寸／100%</text><text x="8" y="50" font-size="3.2">關閉「符合頁面」</text><text x="8" y="60" font-size="3.2">關閉瀏覽器頁首與頁尾</text><text x="8" y="88" font-size="3">此頁可不貼管；紙樣另頁。</text></svg></div><p class="small">拼接順序示意（非 1:1）</p>${maps}</div><div><ol class="guide-steps"><li><strong>量校正尺</strong><br>兩方向都正確，才用紙樣。</li><li><strong>只裁白邊</strong><br>保留圖形重疊區 ${p.overlap} mm。</li><li><strong>對同號圈十字</strong><br>重疊後黏好，保持線條連續。</li><li><strong>對基準，再包管</strong><br>先描線、試配與修磨。</li></ol><div class="recipe">${plan.parts.map(part=>`<p><strong>${xmlText(part.template.id.startsWith('branch')?'支管':part.template.id.startsWith('main')?'主管':part.template.title)}：</strong>${xmlText(paperPositionRecipe(part.template))}</p>`).join('')}</div></div></div>`);
+  }
+  for(const part of plan.parts)for(const tile of part.tiles){const code=tileCode(part,tile);pages.push(`<header class="tile-header"><h1>${code}　${xmlText(part.template.title)}　1:1</h1><p>接頭 ${xmlText(id)} · 版次 ${xmlText(rev)} · ${part.pageCount} 張中第 ${(tile.row-1)*part.columns+tile.column} 張 · ${part.rows} 列 × ${part.columns} 欄</p></header>${compactTileMarkup(part,tile,p,`paper-${pages.length+1}`)}<p class="tile-legend">${xmlText(templateLegend(part.template))}<br>只裁白邊，保留重疊圖形；文字面朝外。先核對兩方向 100 mm 校正尺。</p>`);}
+  return paperPrintDocument(p,`${id} · 1:1 貼管紙樣`,pages);
+}
+
 export function downloadText(text, filename, mimeType = 'text/plain;charset=utf-8') {
   if (typeof document === 'undefined') throw new Error('下載功能需在瀏覽器中執行。');
   const blob = new Blob([text], { type: mimeType }), url = URL.createObjectURL(blob);
@@ -867,4 +941,106 @@ export function openPrintReport(html, filename = '配管製作報告.html') {
   const printButton = reportWindow.document.querySelector('.print-controls button');
   if (printButton) printButton.onclick = () => reportWindow.print();
   return { opened: true, downloaded: false };
+}
+/**
+ * Append candidate for exports.js; intentionally has no imports.
+ * The default is one portrait work order, with separate optional record pages.
+ * This document is a dimension record, never a 1:1 cutting template.
+ */
+export function buildFieldWorkOrderHTML(result, meta = {}, options = {}) {
+  assertValidResult(result);
+  const params = { padManufacturing: 'neutral', autoPrecision: true, ...validateProjectParams(result.params) };
+  const metadata = cleanMetadata(meta);
+  if (options.orientation && !['portrait', 'auto'].includes(options.orientation))
+    throw new Error('現場工單使用直式；貼管紙樣請使用紙樣列印。');
+  const paper = paperSetup({ paper: options.paper ?? 'A4', orientation: 'portrait', margin: 10 });
+  const reconciled = options.fabrication === undefined ? null : reconcileFitRecords(options.fabrication, params);
+  const fabrication = reconciled?.plan ?? null;
+  const wrap = createBranchCuttingWrap(result, { stationCount: 12, datumStep: 1 });
+  const stations = wrap.mapping.stations;
+  if (!Array.isArray(stations) || stations.length !== 13)
+    throw new Error('現場工單缺少 12 分點與 360° 閉合資料。');
+  const datumDepth = wrap.mapping.originalDepthOrigin;
+  if (!Number.isInteger(datumDepth)) throw new Error('現場工單定位環須使用整毫米尺寸。');
+
+  const digits = stationDigits(params.tolerance);
+  const display = value => value === null || value === undefined ? '未設定' : typeof value === 'number' ? fmt(value, digits) : String(value);
+  const row = (label, value) => `<tr><th>${xmlText(label)}</th><td>${xmlText(display(value))}</td></tr>`;
+  const jointID = String(metadata.id ?? '未編號');
+  const revision = String(metadata.revision ?? '1');
+  const date = metadata.updatedAt ?? metadata.createdAt ?? new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Taipei', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+  const fullMetaLine = `接頭 ${jointID} · 版次 ${revision} · 日期 ${date}${metadata.preparedBy ? ` · 製作 ${metadata.preparedBy}` : ''}${metadata.project ?? metadata.projectName ? ` · 專案 ${metadata.project ?? metadata.projectName}` : ''}`;
+  const compactMetaLine = fullMetaLine.length > 96 ? `${fullMetaLine.slice(0, 93)}…（完整資料見附件）` : fullMetaLine;
+  const bodies = [];
+  const addPage = (body, className) => bodies.push({ body, className });
+  const heading = title => `<header><h1>${xmlText(title)}</h1><p class="meta">${xmlText(compactMetaLine)}</p></header>`;
+  const radius = params.mainOD / 2;
+  const height = Math.sqrt(radius * radius - params.offset * params.offset);
+  const surfacePosition = params.jointPosition + height / Math.tan(params.angle * Math.PI / 180);
+  const surfaceAzimuth = ((params.azimuth + Math.asin(params.offset / radius) * 180 / Math.PI) % 360 + 360) % 360;
+  const toolNames = { grinder: '砂輪機切割／修磨', saw: '鋸切', plasma: '電漿切割', other: '其他工具' };
+  const hasStock = fabrication?.stock !== null && fabrication?.stock !== undefined;
+  const stockValue = hasStock ? fabrication.stock : null;
+  const budget = fabrication ? machiningBudget(fabrication) : { known: false };
+  const machiningLine = fabrication
+    ? `工具：${toolNames[fabrication.tool]}；沿軸留料 ${display(fabrication.stock)} mm；預估標線 ±${display(fabrication.markError)} mm；切磨 ±${display(fabrication.cutError)} mm；實測切縫 ${display(fabrication.kerf)} mm。`
+    : '加工留料、工具偏差與切縫尚未設定；下表列成品尺寸。';
+  const roughCell = station => Math.max(station.outerDepth, station.innerDepth) + stockValue;
+  const stationRows = stations.map((station, index) => {
+    const closing = index === 12;
+    return `<tr${closing ? ' class="closing"' : ''} data-station-angle="${station.angle}"><td>${closing ? 'S01 閉合' : `S${String(index + 1).padStart(2, '0')}`}</td><td>${fmt(station.angle, 1)}°</td><td>${fmt(station.circumference, digits)}</td><td>${fmt(station.outerDepth, digits)}</td><td>${fmt(station.innerDepth, digits)}</td>${hasStock ? `<td>${fmt(roughCell(station), digits)}</td>` : ''}</tr>`;
+  }).join('');
+  const tackLine = fabrication?.tackAngles.length ? `<p>點固參考母線：${fabrication.tackAngles.map(angle => `${fmt(angle)}°`).join('、')}。位置不代表點固已完成或焊接順序。</p>` : '';
+  const staleNotice = reconciled?.cleared ? '<p class="attention">尺寸已更改，舊試配與點固後實測紀錄已清除；請重新量測。</p>' : '';
+  const padLine = params.padEnabled
+    ? `補強板：厚 ${fmt(params.padThickness)} mm，${ENUM_LABELS[params.padShape]}，${ENUM_LABELS[params.padSplit]}；${params.padManufacturing === 'formed-normal' ? '已彎板法線切孔' : `平板中性層，K ${fmt(params.kFactor)}`}。`
+    : '本接頭未加補強板。';
+
+  addPage(`${heading('現場加工放樣工單')}
+    <div class="dimensions"><table>${row('主管', `外徑 Ø${fmt(params.mainOD)} × 壁厚 ${fmt(params.mainWall)} mm；長 ${fmt(params.mainLength)} mm`)}${row('支管', `外徑 Ø${fmt(params.branchOD)} × 壁厚 ${fmt(params.branchWall)} mm；最短成品長 ${fmt(params.branchLength)} mm`)}${row('接法與角度', `${ENUM_LABELS[params.jointType]}；軸線夾角 ${fmt(params.angle)}°；偏心 ${fmt(params.offset)} mm`)}${row('主管實體定位點', `距基準端 ${fmt(surfacePosition, digits)} mm；由基準端看，管頂 0°、逆時針 ${fmt(surfaceAzimuth, digits)}°`)}${row('接合幾何', params.jointType === 'in' ? `沿軸凸入 ${fmt(params.projection)} mm；孔口每側放大量 ${fmt(params.holeGap)} mm` : `外貼徑向間隙 ${fmt(params.rootGap)} mm；孔口每側放大量 ${fmt(params.holeGap)} mm`)}</table></div>
+    <div class="datum"><strong>D 定位環：距支管自由直端 ${datumDepth} mm</strong><p>沿支管軸量整毫米 D，畫一整圈；貼管紙樣上的 D 環對準此線，0° 母線對準同名標記。D 是定位環，並非切口深度零。</p></div>
+    <h2>支管放樣：12 分點＋360° 閉合</h2><p class="small">由自由直端朝接頭看，從 0° 母線順時針量外徑管周；內外切深均從同一自由直端沿支管軸量。S 為放樣分點；試配 P 分點按角度配對。</p>
+    <table class="station-table"><thead><tr><th>放樣點</th><th>角度</th><th>外徑管周<br>mm</th><th>成品外切深<br>mm</th><th>成品內切深<br>mm</th>${hasStock ? '<th>粗切深度<br>mm</th>' : ''}</tr></thead><tbody>${stationRows}</tbody></table>
+    <div class="process-strip"><p>${xmlText(machiningLine)}</p>${budget.known ? `<p>沿軸最不利剩餘留料 ${fmt(budget.remaining)} mm＝留料−標線偏差−切磨偏差；${budget.remaining < 0 ? '估計偏差大於留料，請調整。' : '仍需試配確認。'} 此值不是根隙。</p>` : ''}<p>${xmlText(padLine)}</p>${tackLine}${staleNotice}</div>
+    <div class="sequence"><strong>尺寸核對 □ → 標線 □ → 粗切 □ → 修磨 □ → 試配 □ → 點固後重測 □</strong><p>切縫放廢料側；內外成品緣分別核對，超出工法根隙範圍須處置並重測。</p></div>
+    <p class="scope">本頁為尺寸工單，不能當 1:1 裁切紙樣；紙樣另印。僅提供幾何加工放樣，不作承壓或焊接設計判定。</p>`, 'work-order');
+
+  if (fabrication) {
+    const f = fabrication;
+    const hasRequirements = !!(f.wpsId.trim() || f.gapBasis.trim() || [f.gapMin, f.gapMax, f.bevelAngle, f.rootFace].some(value => value !== null));
+    if (hasRequirements) {
+      addPage(`${heading('工法與接頭要求紀錄')}<table class="requirements">${row('WPS／工法編號與版次', f.wpsId || '未設定')}${row('根隙量測方向／位置', f.gapBasis || '未設定')}${row('工法根隙下限 mm', f.gapMin)}${row('工法根隙上限 mm', f.gapMax)}${row('坡口單邊角 °（工藝記錄）', f.bevelAngle)}${row('鈍邊 mm（工藝記錄）', f.rootFace)}${row('加工工具', toolNames[f.tool])}${row('沿軸粗切留料 mm', f.stock)}${row('預估標線最大偏差 ±mm', f.markError)}${row('預估切磨最大偏差 ±mm', f.cutError)}${row('實測切縫寬度 mm（僅記錄）', f.kerf)}${row('切口狀況', { unknown: '尚未檢查', checked: '已核對切口與量測基準', damaged: '缺肉／切溝／裂紋等，需處置' }[f.edgeCondition])}${row('量測紀錄分點數', f.count)}${row('點固參考母線', f.tackAngles.length ? f.tackAngles.map(angle => `${fmt(angle)}°`).join('、') : '未指定')}</table><div class="note">根隙依上列量測方向與位置核對。沿軸留料、工具誤差及主管徑向間隙不能直接當成焊接根隙；刀縫不自動補償。坡口與焊道只作紀錄，尚未生成坡口曲面或決定焊接順序。</div>`, 'requirements-page');
+    }
+    const hasMeasurements = f.preGaps.some(value => value !== null) || f.postGaps.some(value => value !== null) || f.edgeCondition !== 'unknown';
+    if (hasMeasurements) {
+      const capacity = paper.paper === 'A4' ? 18 : 24;
+      const sheets = Math.ceil(f.count / capacity);
+      for (let start = 0; start < f.count; start += capacity) {
+        const indices = Array.from({ length: Math.min(capacity, f.count - start) }, (_, index) => start + index);
+        const fitRows = indices.map(index => `<tr data-fit-index="${index}"><td>P${index + 1}</td><td>${fmt(index * 360 / f.count)}°</td><td>${f.preGaps[index] === null ? '未量測' : fmt(f.preGaps[index], 4)}</td><td>${f.postGaps[index] === null ? '未量測' : fmt(f.postGaps[index], 4)}</td><td>${f.tackAngles.includes(index * 360 / f.count) ? `T${index + 1}` : '—'}</td><td>前：${xmlText(fitPointStatus(f, index).label)}<br>後：${xmlText(fitPointStatus(f, index, 'post').label)}</td></tr>`).join('');
+        const pre = fitPhaseStatus(f), post = fitPhaseStatus(f, 'post');
+        addPage(`${heading(`試配與點固後根隙紀錄 · ${Math.floor(start / capacity) + 1}/${sheets}`)}<p>工法：${xmlText(f.wpsId || '未設定')}；根隙 ${xmlText(display(f.gapMin))}–${xmlText(display(f.gapMax))} mm。</p><p>量測方向／位置：${xmlText(f.gapBasis || '未設定')}。</p><p>試配：${xmlText(pre.label)}，已填 ${pre.measured}/${pre.total} 點。點固後：${xmlText(post.label)}，已填 ${post.measured}/${post.total} 點。</p><table class="fit-table"><thead><tr><th>量測點</th><th>角度</th><th>試配根隙<br>mm</th><th>點固後根隙<br>mm</th><th>點固參考</th><th>量測紀錄狀態</th></tr></thead><tbody>${fitRows}</tbody></table><div class="note">P 點按 ${f.count} 等分，由自由直端看接頭，0° 起順時針增加。T 只作點固參考母線；記號所在定位環不是實際焊點。未量測保持未知；所填分點在範圍內仍需依工法檢查全周。處置文字不會把超限值改成合格。</div>`, 'fit-page');
+      }
+    }
+    const noteSheets = processNoteSheets(f, paper);
+    noteSheets.forEach((sheet, index) => addPage(`${heading(`焊接工藝與處置文字 · ${index + 1}/${noteSheets.length}`)}${sheet.map(entry => `<h2>${xmlText(entry.label)}</h2><p class="process-text">${xmlText(entry.text)}</p>`).join('')}<p class="scope">文字依原紀錄完整保留；超限須處置並重新量測，本工單不決定焊接接受性。</p>`, 'process-page'));
+  }
+
+  // Long metadata and warnings remain available without crowding the default page.
+  const supplementary = [];
+  if (fullMetaLine.length > 96) supplementary.push(['完整接頭資料', fullMetaLine]);
+  if (metadata.notes) supplementary.push(['專案備註', metadata.notes]);
+  const warnings = safeMessages(result.warnings);
+  if (warnings.length) supplementary.push(['幾何加工注意事項', warnings.join('\n')]);
+  for (const [label, text] of supplementary) {
+    const lines = text.replace(/\r\n?/g, '\n').split('\n').flatMap(line => svgTextLines(line, paper.contentW - 6, 3.2));
+    const capacity = Math.max(12, Math.floor((paper.contentH - 40) / 5.2));
+    for (let start = 0; start < lines.length; start += capacity)
+      addPage(`${heading(`${label}${start ? '（續）' : ''}`)}<p class="process-text">${xmlText(lines.slice(start, start + capacity).join('\n'))}</p>`, 'process-page');
+  }
+
+  const pages = bodies.map(({ body, className }, index) => `<section class="page ${className}" data-page="${index + 1}">${body}${footer('現場加工放樣工單', index + 1, bodies.length)}</section>`).join('\n');
+  return `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${xmlText(jointID)} · 現場加工放樣工單</title><style>
+    @page{size:${paper.width}mm ${paper.height}mm;margin:0}*{box-sizing:border-box}html,body{margin:0;padding:0;color:#111;font-family:"Microsoft JhengHei",Arial,sans-serif;font-size:3mm;line-height:1.4}body{background:#e8e8e8}.page{width:${paper.width}mm;height:${paper.height}mm;padding:${paper.margin}mm;margin:6mm auto;position:relative;background:white;break-after:page;page-break-after:always}.page:last-child{break-after:auto;page-break-after:auto}header{border-bottom:.35mm solid #111;padding-bottom:2mm;margin-bottom:3mm}h1{font-size:5mm;line-height:1.2;margin:0 0 1.5mm}h2{font-size:3.5mm;margin:3mm 0 1.5mm}p{margin:1.5mm 0}.meta{font-size:2.7mm;overflow-wrap:anywhere}.small,.scope{font-size:2.6mm}.scope{border-top:.2mm solid #777;padding-top:2mm;margin-top:2mm}table{width:100%;border-collapse:collapse;font-size:2.8mm;table-layout:fixed}th,td{border:.2mm solid #555;padding:1.1mm 1.3mm;vertical-align:top;overflow-wrap:anywhere}th{font-weight:600}.dimensions th{width:28%;text-align:left}.datum{border:.5mm solid #111;padding:2.5mm 3mm;margin:3mm 0}.datum strong{font-size:4.3mm}.datum p{font-size:2.7mm}.station-table th,.station-table td{text-align:right}.station-table th:first-child,.station-table td:first-child{text-align:left}.station-table td{font-variant-numeric:tabular-nums;white-space:nowrap;padding-top:1.1mm;padding-bottom:1.1mm}.closing{font-weight:600;background:#eee}.process-strip,.sequence,.note{border:.25mm solid #777;padding:2mm 2.5mm;margin-top:3mm;font-size:2.7mm}.process-strip p{margin:1mm 0}.sequence strong{font-size:2.8mm}.attention{font-weight:600}.requirements th{width:43%;text-align:left}.requirements td{white-space:pre-wrap}.fit-table{margin-top:3mm;font-size:2.5mm}.fit-table th,.fit-table td{padding:1.3mm 1mm}.fit-table th:last-child,.fit-table td:last-child{width:33%}.process-text{white-space:pre-wrap;overflow-wrap:anywhere;font-size:3.2mm;line-height:5.2mm;margin:1.5mm 0}footer{position:absolute;left:${paper.margin}mm;right:${paper.margin}mm;bottom:5mm;border-top:.2mm solid #555;padding-top:1mm;font-size:2.3mm}footer span{float:right}.print-controls{position:sticky;top:0;z-index:2;padding:12px;background:white;text-align:center}.print-controls button{padding:9px 18px;margin-right:10px;font:inherit;cursor:pointer}@media print{html,body{background:white}.page{margin:0}.print-controls{display:none}*{-webkit-print-color-adjust:exact;print-color-adjust:exact}}
+  </style></head><body><nav class="print-controls"><button onclick="window.print()">列印現場工單</button><span>${paper.paper} 直式；本文件是尺寸紀錄，貼管 1:1 紙樣另印。</span></nav>${pages}</body></html>`;
 }
