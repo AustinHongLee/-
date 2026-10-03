@@ -1,10 +1,28 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { cylindricalUVToWorld, rotateAroundMain } from './geometry.js';
+import { torusSurfacePoint, elbowFrame } from './elbow-geometry.js';
 
 const TAU = Math.PI * 2;
 const open = p => p.slice(0, -1);
 const path = points => new THREE.Path(points.map(p => new THREE.Vector2(...p)));
+
+function elbowSurface(e,r,hole,inward=false) {
+  const phi=e.surfaceClock,lo=phi-Math.PI,hi=phi+Math.PI,R=e.bendRadius;
+  const outer=[[0,r*lo],[R*e.bendAngle,r*lo],[R*e.bendAngle,r*hi],[0,r*hi],[0,r*lo]];
+  const shape=new THREE.Shape(open(outer).map(p=>new THREE.Vector2(...p)));
+  shape.holes=[path(open(hole))];
+  const flat=new THREE.ShapeGeometry(shape),attr=flat.getAttribute('position');
+  const indices=flat.index?.array??Array.from({length:attr.count},(_,i)=>i),positions=[],normals=[];
+  const add=(a,b,c,depth=0)=>{
+    const pairs=[[a,b,c],[b,c,a],[c,a,b]],size=p=>Math.max(Math.abs(p[0][0]-p[1][0])/R,Math.abs(p[0][1]-p[1][1])/r);
+    const worst=pairs.reduce((best,p)=>size(p)>size(best)?p:best);
+    if(size(worst)>Math.PI/36&&depth<17){const[u,v,w]=worst,mid=u.map((x,i)=>(x+v[i])/2);add(u,mid,w,depth+1);add(mid,v,w,depth+1);return;}
+    for(const [s,u]of[a,b,c]){const beta=s/R,angle=u/r,f=elbowFrame(beta,R);positions.push(...torusSurfacePoint(beta,angle,R,r));normals.push(...f.normal.map((v,i)=>(v*Math.cos(angle)+f.binormal[i]*Math.sin(angle))*(inward?-1:1)));}
+  };
+  for(let i=0;i<indices.length;i+=3)add(...Array.from(indices.slice(i,i+3),j=>[attr.getX(j),attr.getY(j)]));
+  flat.dispose();const geo=new THREE.BufferGeometry();geo.setAttribute('position',new THREE.Float32BufferAttribute(positions,3));geo.setAttribute('normal',new THREE.Float32BufferAttribute(normals,3));return geo;
+}
 
 function surface(outer, holes, radius, azimuth, inward = false) {
   const shape = new THREE.Shape(open(outer).map(p => new THREE.Vector2(...p)));
@@ -92,9 +110,13 @@ export class JointViewer {
     const mat=dashed?new THREE.LineDashedMaterial({color,dashSize:5,gapSize:3}):new THREE.LineBasicMaterial({color});
     const line=new THREE.Line(geo,mat);if(dashed)line.computeLineDistances();group.add(line);return line;
   }
+  label(text,point,group,size=30){
+    const canvas=document.createElement('canvas');canvas.width=192;canvas.height=80;const ctx=canvas.getContext('2d');ctx.fillStyle='#ffffffed';ctx.fillRect(0,0,192,80);ctx.fillStyle='#173b5c';ctx.font='bold 44px sans-serif';ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText(text,96,40);
+    const sprite=new THREE.Sprite(new THREE.SpriteMaterial({map:new THREE.CanvasTexture(canvas),depthTest:false}));sprite.position.set(...point);sprite.scale.set(size*2.4,size,1);sprite.renderOrder=12;group.add(sprite);
+  }
   clear() {
     if(!this.available)return;
-    this.model.traverse(item=>{item.geometry?.dispose();if(item.material)item.material.dispose();});
+    this.model.traverse(item=>{item.geometry?.dispose();if(item.material){item.material.map?.dispose();item.material.dispose();}});
     this.model.clear();this.marker.visible=false;this.parts={};this.render();
   }
   update(result) {
@@ -103,6 +125,18 @@ export class JointViewer {
     const {main:m,branch:b,pad,axes}=result.geometry,p=result.params;
     for(const id of ['main','branch','pad']) {const group=new THREE.Group();this.parts[id]=group;this.model.add(group);}
     const mainMat=this.material(0x8195ab),branchMat=this.material(0x55b9df),padMat=this.material(0xdba05b);
+    if(p.hostType==='elbow') {
+      const e=result.geometry.elbow;
+      for(const[r,hole,inward]of[[e.outerRadius,e.outerHoleUV,false],[e.innerRadius,e.innerHoleUV,true]])this.mesh(elbowSurface(e,r,hole,inward),mainMat.clone(),this.parts.main);
+      this.mesh(loft(e.outerHole3D,e.innerHole3D),mainMat.clone(),this.parts.main);
+      const ring=(beta,r)=>Array.from({length:97},(_,i)=>torusSurfacePoint(beta,TAU*i/96,e.bendRadius,r));
+      for(const beta of[0,e.bendAngle]){this.mesh(loft(ring(beta,e.outerRadius),ring(beta,e.innerRadius)),mainMat.clone(),this.parts.main);this.line(ring(beta,e.outerRadius),0xa7bbd0,this.parts.main);}
+      this.line(e.outerHole3D,0xc4d4e8,this.parts.main);
+      for(const phi of[0,Math.PI])this.line(Array.from({length:65},(_,i)=>torusSurfacePoint(e.bendAngle*i/64,phi,e.bendRadius,e.outerRadius+.3)),0x677e99,this.parts.main,true);
+      const a=elbowFrame(0,e.bendRadius),end=elbowFrame(e.bendAngle,e.bendRadius),labelSize=Math.max(12,p.mainOD*.12);
+      this.label('A 端',a.center.map((v,i)=>v-a.tangent[i]*labelSize*1.5),this.parts.main,labelSize);
+      this.label('B 端',end.center.map((v,i)=>v+end.tangent[i]*labelSize*1.5),this.parts.main,labelSize);
+    } else {
     const ring=(x,r)=>Array.from({length:97},(_,i)=>cylindricalUVToWorld([x,r*(-Math.PI+TAU*i/96)],r,p.azimuth));
     for(const [r,hole,inward] of [[m.outerRadius,m.outerHoleUV,false],[m.innerRadius,m.innerHoleUV,true]]) {
       const outer=[[0,-Math.PI*r],[m.length,-Math.PI*r],[m.length,Math.PI*r],[0,Math.PI*r],[0,-Math.PI*r]];
@@ -116,6 +150,7 @@ export class JointViewer {
     this.line(m.outerHole3D,0xc4d4e8,this.parts.main);
     const seam=[cylindricalUVToWorld([0,-Math.PI*m.outerRadius],m.outerRadius+.3,p.azimuth),cylindricalUVToWorld([m.length,-Math.PI*m.outerRadius],m.outerRadius+.3,p.azimuth)];
     this.line(seam,0x677e99,this.parts.main,true);
+    }
     for(const [a,c] of [[b.outerCut,b.outerEnd],[b.innerCut,b.innerEnd],[b.outerCut,b.innerCut],[b.outerEnd,b.innerEnd]])this.mesh(loft(a,c),branchMat.clone(),this.parts.branch);
     this.line(b.outerCut,0xa7e8ff,this.parts.branch);this.line(b.outerEnd,0xa7e8ff,this.parts.branch);
     this.line([b.outerCut[0],b.outerEnd[0]],0xc6f0ff,this.parts.branch,true);
@@ -150,7 +185,8 @@ export class JointViewer {
     const p=this.result.params,d=this.result.geometry.axes.branchDirection;
     this.parts.branch.position.set(...d.map(v=>v*(this.flags.explode?70:0)));
     const outward=rotateAroundMain([0,0,this.flags.explode?35:0],p.azimuth);this.parts.pad.position.set(...outward);
-    const plane=new THREE.Plane(new THREE.Vector3(...rotateAroundMain([0,1,0],p.azimuth)),-p.offset);
+    const origin=this.result.geometry.axes.branchOrigin??[0,0,0],normal=p.hostType==='elbow'?this.result.geometry.axes.station90:rotateAroundMain([0,1,0],p.azimuth);
+    const plane=new THREE.Plane(new THREE.Vector3(...normal),p.hostType==='elbow'?-normal.reduce((sum,v,i)=>sum+v*origin[i],0):-p.offset);
     this.model.traverse(o=>{if(o.isMesh){o.material.transparent=this.flags.transparent;o.material.opacity=this.flags.transparent?.32:1;o.material.depthWrite=!this.flags.transparent;o.material.clippingPlanes=this.flags.section?[plane]:[];o.material.needsUpdate=true;}});
     this.render();
   }
@@ -184,6 +220,7 @@ export class JointViewer {
     if(!this.available||!this.result?.valid||!Array.isArray(point)||point.length!==3)return;
     this.marker.position.set(...point);this.marker.position.add(this.parts.branch.position);this.marker.visible=true;this.render();
   }
+  highlightMother(point){if(!this.available||!this.result?.valid)return;this.marker.position.set(...point);this.marker.visible=true;this.render();}
   render() {if(this.renderer&&this.scene&&this.camera)this.renderer.render(this.scene,this.camera);}
   image() {if(!this.available)return '';this.render();return this.renderer.domElement.toDataURL('image/png');}
 }

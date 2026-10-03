@@ -2,10 +2,13 @@
  * No drawing operation changes the size or shape of a supplied contour.
  */
 import { validateFabricationPlan, reconcileFitRecords, machiningBudget, fitPointStatus, fitPhaseStatus, createRoughCutTemplate } from './fabrication-plan.js';
+import { computeExactElbowStationTable } from './elbow-geometry.js';
+import { buildElbowWorkOrderHTML,elbowWorkOrderPageRoles } from './elbow-field.js';
 export const PROJECT_FORMAT = 'pipe-fabrication-project';
 export const PROJECT_VERSION = 1;
 
 const PARAM_RULES = Object.freeze({
+  hostType:['straight','elbow'],bendRadius:'positive',bendAngle:'bendAngle',bendPosition:'number',surfaceClock:'number',branchSwivel:'number',
   mainOD: 'positive', mainWall: 'positive', mainLength: 'positive', jointPosition: 'number',
   branchOD: 'positive', branchWall: 'positive', branchLength: 'positive', angle: 'angle',
   azimuth: 'number', offset: 'number', jointType: ['on', 'in'], projection: 'nonnegative',
@@ -278,6 +281,7 @@ export function validateProjectParams(params) {
       if (rule === 'positive' && value <= 0) throw new Error(`${LABELS[key]?.[0] ?? key} 必須大於零。`);
       if (rule === 'nonnegative' && value < 0) throw new Error(`${LABELS[key]?.[0] ?? key} 不得小於零。`);
       if (rule === 'angle' && (value <= 0 || value >= 180)) throw new Error('軸線夾角必須大於 0° 且小於 180°。');
+      if (rule === 'bendAngle' && (value <= 0 || value > 180)) throw new Error('彎頭範圍须大於 0° 且不超過 180°。');
       if (rule === 'factor' && (value < 0 || value > 1)) throw new Error('中性層係數須介於 0 與 1。');
       if (rule === 'samples' && (!Number.isInteger(value) || value < 36 || value > 4096)) throw new Error('圓周取樣分點數須為 36 至 4096 的整數。');
     }
@@ -363,6 +367,7 @@ function clipPolylineToRectangle(points, bounds) {
  * No crop may truncate a hole. This is a paper boundary, not a metal outer cut.
  */
 export function createMainOpeningPatch(result, options = {}) {
+  if(result?.params?.hostType==='elbow')throw new Error('彎頭母孔使用分點定位工單，不能產生整片 1:1 包覆紙樣。');
   if (!plainObject(result) || result.valid !== true) throw new Error('請先產生有效的主管開孔模型。');
   const source = result.templates?.find(t => t.id === 'main');
   if (!source) throw new Error('模型缺少主管整周樣板。');
@@ -426,6 +431,13 @@ function branchSource(template) {
   return { c, outer: uniqueOuter, inner: copy(inner), mapping: m };
 }
 function branchExactStation(result, angle, source) {
+  if(result?.params?.hostType==='elbow') {
+    const count=source.mapping.stationCount??24;
+    const stations=computeExactElbowStationTable(result,count);
+    const exact=stations.find(s=>Math.abs(s.angle-angle)<1e-8);
+    if(!exact)throw new Error('彎頭紙樣角度必須由精確分點計算取得。');
+    return exact;
+  }
   const known = result?.stationTable?.find(s => Math.abs(s.angle - angle) < 1e-8);
   if (known && Number.isFinite(known.outerDepth)) return known;
   const p = result?.params;
@@ -466,10 +478,10 @@ function branchPaper(template, result, options, local) {
   const tickY = local ? datumY : Math.min(14, height / 3);
   const labelCount = [stationCount, 12, 4, 2].find(count => c / count >= 8) ?? 2;
   const labelStride = stationCount / labelCount;
-  const stationRows = [];
+  const stationRows = [],elbowStations=result?.params?.hostType==='elbow'?computeExactElbowStationTable(result,stationCount):null;
   for (let i = 0; i <= stationCount; i++) {
     const angle = i * 360 / stationCount, x = c - c * i / stationCount;
-    if (result?.params) stationRows.push(branchExactStation(result, angle, source));
+    if (result?.params) stationRows.push(elbowStations?elbowStations[i]:branchExactStation(result, angle, source));
     references.push({ points: [[x, Math.max(0, tickY - 2)], [x, Math.min(height, tickY + 2)]], label: i % labelStride === 0 ? `${fmt(angle)}°` : '', type: 'tick',
       labelPosition: [Math.min(c - 1, Math.max(1, x)), Math.max(3, tickY - 3)], textAnchor: i === 0 ? 'end' : 'start' });
   }
@@ -483,7 +495,7 @@ function branchPaper(template, result, options, local) {
     '文字面朝外包覆：0° 在紙樣右側，360° 在左側；兩側是同一母線。由自由直端看向接頭，角度正向為順時針，紙上角度往左增加。',
     `支管實際外徑周長 ${fmt(c, 6)} mm；右側 ${fmt(tab)} mm 斜線區只作貼合舌，覆在左側 0–${fmt(tab)} mm 紙區。細點矩形只裁紙，粗實線 CUT_FISHMOUTH 才切管材，內緣虛線只供壁厚修磨。`,
     ...(local ? [`先由自由直端面沿管軸量 ${fmt(originalDepthOrigin, 6)} mm 畫定位環線，對準紙樣定位環線；紙樣只截取口部，並未把切口重新當成深度零。${top < 0 ? `紙樣上緣需凸出直端 ${fmt(-top, 6)} mm，可修掉空白，但不可移動定位環線。` : `紙樣上緣距自由直端 ${fmt(top, 6)} mm。`}`] : [top < 0 ? `紙樣深度 0 定位線對準自由直端面，紙緣凸出直端 ${fmt(-top, 6)} mm；所有內外緣共用原直端基準。` : '紙樣上緣對準自由直端面；所有外緣、內緣深度共用這個直端基準。']),
-    '0° 母線位於通過支管軸線且平行主管軸線的平面，徑向朝主管基準端的一側；有偏心時兩條實際軸線未必共面。',
+    ...(result?.params?.hostType==='elbow'?['彎頭支管 0° 母線朝 −當地切線的截面投影，即朝 A 端方向；從自由端朝接頭看，站角順時針增加。',...template.notes??[]]:['0° 母線位於通過支管軸線且平行主管軸線的平面，徑向朝主管基準端的一側；有偏心時兩條實際軸線未必共面。']),
   ];
   return { ...template, id: local ? 'branch-local' : 'branch', title: local ? '支管口部短包覆紙樣' : '支管整長包覆紙樣',
     basis: '支管實際外徑，文字面朝外（深度由自由直端量）', width, height, outerRole: 'paper-boundary',
@@ -620,6 +632,12 @@ function processNoteSheets(plan,paper){
 /** Exposed for the UI: the exact same plan is used by the report renderer. */
 export function reportPagePlan(result, options = {}) {
   assertValidResult(result);
+  if(result.params.hostType==='elbow') {
+    if(options.parts?.some(id=>!['branch','branch-local'].includes(id)))throw new Error('彎頭報告僅支援支管與開孔定位資料；沒有母管包覆或粗切樣板。');
+    const rows=computeExactElbowStationTable(result,options.stationCount??12),roles=elbowWorkOrderPageRoles(result,{...options,branchCount:options.stationCount??12,includeValidation:true}),count=role=>roles.filter(value=>value===role).length;
+    const stationSheets=Array.from({length:Math.ceil(rows.length/13)},(_,i)=>({rows:rows.slice(i*13,(i+1)*13)}));
+    return {totalPages:roles.length,coverPages:count('mother'),notePages:count('validation')+count('metadata'),fabricationPages:count('process')+count('process-notes'),stationPages:count('branch'),stationRowCount:rows.length,stationSheets,parts:[]};
+  }
   if (options.orientation === 'auto') return reportPagePlan(result, suggestReportOptions(result, options).options);
   const paper = paperSetup(options);
   if (options.mainPattern !== undefined && !['full', 'local'].includes(options.mainPattern)) throw new Error('主管樣板須為整周 full 或局部 local。');
@@ -756,6 +774,7 @@ ${horizontalRuler(4, tileH + 3)}${verticalRuler(tileW + 3, 4)}
  * assemblySVG is accepted only as caller-generated trusted markup; never use imported text.
  */
 export function buildReportHTML(result, meta = {}, options = {}) {
+  if(result.params?.hostType==='elbow'){reportPagePlan(result,{...options,metadata:meta});return buildElbowWorkOrderHTML(result,meta,{...options,branchCount:options.stationCount??12,includeValidation:true});}
   const plan = reportPagePlan(result, options), p = plan.paper;
   const params = { padManufacturing: 'neutral', autoPrecision: true, ...validateProjectParams(result.params) };
   const title = String(meta.title ?? meta.name ?? '配管接頭製作報告');
@@ -889,6 +908,10 @@ export function paperPatternPlan(result, options = {}) {
 
 export function paperPositionRecipe(template) {
   const m=template.mapping??{};
+  if(m.coordinateSystem==='branch-outer-wrap'){
+    const datum=m.localCuttingWrap?`從支管自由直端量 ${fmt(m.originalDepthOrigin)} mm 畫一圈，對準紙樣「定位環線」。`:'紙樣深度 0 基準對準自由直端面。';
+    return datum+(m.hostType==='elbow'?'0° 母線朝 A 端的當地切線投影；':'0° 母線朝主管基準端；')+'文字面朝外，右側 0° 與左側 360° 貼回同一母線。';
+  }
   if(m.localCuttingWrap)return `從支管自由直端量 ${fmt(m.originalDepthOrigin)} mm 畫一圈，對準紙樣「定位環線」。0° 母線朝主管基準端；文字面朝外，右側 0° 與左側 360° 貼回同一母線。`;
   if(m.positioning?.A&&m.positioning?.B){const {A,B}=m.positioning;return `先找主管基準端與背面 0° 起縫。A：距基準端 ${fmt(A.axial,2)} mm、周向 ${fmt(A.arc,2)} mm；B：距基準端 ${fmt(B.axial,2)} mm、周向 ${fmt(B.arc,2)} mm。由基準端看向另一端，沿逆時針量周向，對準 A／B 十字。`}
   return m.paperAxes==='u-x'&&template.basis?.includes('外表面')?'文字朝外貼在已彎補強板外表面，對準主管軸向與起縫；孔口沿指定板厚法線加工。':'此為平板下料紙樣。對準板材軸向，先切平板再捲彎；成形後核對孔口內外緣。';
@@ -948,6 +971,7 @@ export function openPrintReport(html, filename = '配管製作報告.html') {
  * This document is a dimension record, never a 1:1 cutting template.
  */
 export function buildFieldWorkOrderHTML(result, meta = {}, options = {}) {
+  if(result.params?.hostType==='elbow')return buildElbowWorkOrderHTML(result,meta,options);
   assertValidResult(result);
   const params = { padManufacturing: 'neutral', autoPrecision: true, ...validateProjectParams(result.params) };
   const metadata = cleanMetadata(meta);
