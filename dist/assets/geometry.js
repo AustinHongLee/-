@@ -10,7 +10,12 @@ export const DEFAULT_PARAMS = Object.freeze({
   offset:0, jointType:'on', projection:0, rootGap:0, holeGap:0.5,
   padEnabled:true, padShape:'circle', padSplit:'single', padThickness:6,
   padMargin:35, padClearance:1, kFactor:0.5, tolerance:0.1, samples:360,
+  padManufacturing:'neutral', autoPrecision:true,
 });
+
+export const PRECISION_SAMPLE_CAP = 4096;
+export const CHORD_GUARD_FACTOR = 1.1;
+const CHORD_FRACTIONS = Array.from({length:7},(_,i)=>(i+1)/8);
 
 const TAU = Math.PI * 2;
 const EPS = 1e-9;
@@ -147,6 +152,80 @@ function splitRegion(outer,hole,axis,coordinate,keepLess) {
   return results;
 }
 
+/** The formed plate's radial cutter removes any material intersecting the
+ * branch-cylinder tool anywhere across the continuous thickness interval.
+ * This is an analytic minimization in rho, not a two-face union or rho grid.
+ */
+function formedNormalEnvelope(p,R,Ro,toolRadius,sa,ca) {
+  const e=p.offset,position=p.jointPosition;
+  const phiMin=Math.min(Math.asin((e-toolRadius)/R),Math.asin((e-toolRadius)/Ro));
+  const phiMax=Math.max(Math.asin((e+toolRadius)/R),Math.asin((e+toolRadius)/Ro));
+  const atPhi=phi=>{
+    const s=Math.sin(phi),c=Math.cos(phi),A=ca*ca*c*c+s*s;
+    let lo=R,hi=Ro;
+    if(Math.abs(s)>1e-13) {
+      const values=[(e-toolRadius)/s,(e+toolRadius)/s].sort((a,b)=>a-b);
+      lo=Math.max(lo,values[0]);hi=Math.min(hi,values[1]);
+    }else if(Math.abs(e)>toolRadius+1e-10)return null;
+    if(lo>hi+1e-8)return null;
+    if(lo>hi){const common=(lo+hi)/2;lo=common;hi=common;}
+    const candidates=[lo,hi];
+    if(Math.abs(s)>1e-13&&A>1e-24) {
+      const w= Math.sign(s)*toolRadius*ca*c/Math.sqrt(A);
+      for(const rho of [(e+w)/s,(e-w)/s]) {
+        if(rho>=lo-1e-9&&rho<=hi+1e-9)candidates.push(Math.max(lo,Math.min(hi,rho)));
+      }
+    }
+    let minX=Infinity,maxX=-Infinity;
+    for(const rho of candidates) {
+      const w=rho*s-e,h=Math.sqrt(Math.max(0,toolRadius*toolRadius-w*w));
+      minX=Math.min(minX,position+(ca*rho*c-h)/sa);
+      maxX=Math.max(maxX,position+(ca*rho*c+h)/sa);
+    }
+    return {minX,maxX};
+  };
+  const minimumAt=([x,u])=>{
+    const phi=u/Ro,s=Math.sin(phi),c=Math.cos(phi),dx=x-position;
+    const A=ca*ca*c*c+s*s,B=sa*ca*dx*c+e*s;
+    const rho=A>1e-24?Math.max(R,Math.min(Ro,B/A)):R;
+    const axial=sa*dx-ca*rho*c,lateral=rho*s-e;
+    return {distanceSquared:axial*axial+lateral*lateral,rho};
+  };
+  const sample=n=>{
+    const half=Math.ceil(n/2),points=[],midpoints=[],probes=[];
+    const phiAt=eta=>(phiMin+phiMax)/2-(phiMax-phiMin)*Math.cos(eta)/2;
+    const curveAt=(eta,upper)=>{
+      const phi=phiAt(eta),range=atPhi(phi);
+      if(!range)throw new Error('法線孔包絡超出解析交線範圍。');
+      return [upper?range.maxX:range.minX,Ro*phi];
+    };
+    const append=(point,edgeProbes)=>{
+      if(points.length&&distance(points.at(-1),point)<1e-10)return;
+      if(points.length) {
+        const pp=edgeProbes??CHORD_FRACTIONS.map(t=>lerp(points.at(-1),point,t));
+        probes.push(pp);midpoints.push(pp[Math.floor(pp.length/2)]);
+      }
+      points.push(point);
+    };
+    // The two sides have smooth cosine spacing at angular tips. Genuine tip
+    // straight edges (e=+/-toolRadius) are retained and never forced to a point.
+    append(curveAt(0,true));
+    for(let i=1;i<=half;i++) {
+      const eta0=Math.PI*(i-1)/half,eta1=Math.PI*i/half;
+      append(curveAt(eta1,true),CHORD_FRACTIONS.map(t=>curveAt(eta0+(eta1-eta0)*t,true)));
+    }
+    append(curveAt(Math.PI,false));
+    for(let i=half-1;i>=0;i--) {
+      const eta0=Math.PI*(i+1)/half,eta1=Math.PI*i/half;
+      append(curveAt(eta1,false),CHORD_FRACTIONS.map(t=>curveAt(eta0+(eta1-eta0)*t,false)));
+    }
+    if(distance(points.at(-1),points[0])>=1e-10)append([...points[0]]);
+    else points[points.length-1]=[...points[0]];
+    return {points,midpoints,probes};
+  };
+  return {atPhi,minimumAt,sample,phiMin,phiMax};
+}
+
 function padBoundary(shape,hole,margin,n,cylinderRadius) {
   const b=bounds(hole),cx=(b.minX+b.maxX)/2,cy=(b.minY+b.maxY)/2;
   const hx=(b.maxX-b.minX)/2,hy=(b.maxY-b.minY)/2;
@@ -157,7 +236,8 @@ function padBoundary(shape,hole,margin,n,cylinderRadius) {
       const ry=shape==='circle'?radius+extra:Math.SQRT2*(hy+margin+extra);
       const at=a=>[cx+rx*Math.cos(a),cy+ry*Math.sin(a)];
       return {outer:close(Array.from({length:n},(_,i)=>at(TAU*i/n))),
-        midpoints:Array.from({length:n},(_,i)=>at(TAU*(i+.5)/n))};
+        midpoints:Array.from({length:n},(_,i)=>at(TAU*(i+.5)/n)),
+        probes:Array.from({length:n},(_,i)=>CHORD_FRACTIONS.map(t=>at(TAU*(i+t)/n)))};
     }
     // Explicit arcs plus straight edges avoid replacing the straight/arc join
     // with a discontinuous corner parameterization. Midpoints are exact on
@@ -166,10 +246,13 @@ function padBoundary(shape,hole,margin,n,cylinderRadius) {
     if(shape==='obround') {
       if(hx>=hy){by=0;r=hy+margin+extra;}else{bx=0;r=hx+margin+extra;}
     }
-    const pts=[],midpoints=[],quarter=Math.max(8,Math.ceil(n/4));
-    const append=(p,mid)=>{
+    const pts=[],midpoints=[],probes=[],quarter=Math.max(8,Math.ceil(n/4));
+    const append=(p,mid,edgeProbes)=>{
       if(pts.length&&distance(pts.at(-1),p)<EPS)return;
-      if(pts.length)midpoints.push(mid??lerp(pts.at(-1),p,.5));
+      if(pts.length) {
+        midpoints.push(mid??lerp(pts.at(-1),p,.5));
+        probes.push(edgeProbes??CHORD_FRACTIONS.map(t=>lerp(pts.at(-1),p,t)));
+      }
       pts.push(p);
     };
     const appendStraight=p=>{
@@ -182,19 +265,20 @@ function padBoundary(shape,hole,margin,n,cylinderRadius) {
       const at=a=>[center[0]+r*Math.cos(a),center[1]+r*Math.sin(a)];
       appendStraight(at(j*Math.PI/2));
       for(let k=1;k<=quarter;k++) {
-        append(at((j+k/quarter)*Math.PI/2),at((j+(k-.5)/quarter)*Math.PI/2));
+        append(at((j+k/quarter)*Math.PI/2),at((j+(k-.5)/quarter)*Math.PI/2),
+          CHORD_FRACTIONS.map(t=>at((j+(k-1+t)/quarter)*Math.PI/2)));
       }
     }
     if(distance(pts[0],pts.at(-1))>=EPS)appendStraight([...pts[0]]);
     else pts[pts.length-1]=[...pts[0]];
-    return {outer:pts,midpoints};
+    return {outer:pts,midpoints,probes};
   };
   let extra=Math.max(.005,margin*(1-Math.cos(Math.PI/n))*2),boundary=make(extra),outer=boundary.outer;
   let gap=minimumContourDistance(outer,hole);
   for(let attempt=0;gap<margin-1e-7&&attempt<5;attempt++) {
     extra+=margin-gap+.001;boundary=make(extra);outer=boundary.outer;gap=minimumContourDistance(outer,hole);
   }
-  return {outer,midpoints:boundary.midpoints,gap,center:[cx,cy]};
+  return {outer,midpoints:boundary.midpoints,probes:boundary.probes,gap,center:[cx,cy]};
 }
 
 function validate(raw) {
@@ -216,17 +300,19 @@ function validate(raw) {
   if(!['on','in'].includes(p.jointType))error('jointType','接頭型式須為外貼 on 或內插 in。');
   if(!['circle','ellipse','obround','rounded'].includes(p.padShape))error('padShape','補強板外形無效。');
   if(!['single','axial','circumferential'].includes(p.padSplit))error('padSplit','補強板分片方式無效。');
+  if(!['neutral','formed-normal'].includes(p.padManufacturing))error('padManufacturing','補強板工法須為 neutral 或 formed-normal。');
+  if(typeof p.autoPrecision!=='boolean')error('autoPrecision','自動精度設定須為布林值。');
   if(p.padEnabled) {
     if(p.padThickness<=0)error('padThickness','補強板厚度必須大於 0。');
     if(p.padMargin<=0)error('padMargin','補強板最低留邊必須大於 0。');
     if(p.kFactor<0||p.kFactor>1)error('kFactor','中性層係數須介於 0 與 1。');
   }
-  if(!Number.isInteger(p.samples)||p.samples<36||p.samples>1440)error('samples','取樣數須為 36 至 1440 的整數。');
+  if(!Number.isInteger(p.samples)||p.samples<36||p.samples>PRECISION_SAMPLE_CAP)error('samples',`取樣數須為 36 至 ${PRECISION_SAMPLE_CAP} 的整數。`);
   p.azimuth=((p.azimuth%360)+360)%360;
   return {p,errors};
 }
 
-export function computeJoint(raw={}) {
+function computeJointAtSamples(raw={}) {
   const {p,errors}=validate(raw),warnings=[];
   const failed=()=>({valid:false,params:p,errors,warnings,templates:[],geometry:null,verification:[],measurements:{},stationTable:[]});
   if(errors.length)return failed();
@@ -320,14 +406,20 @@ export function computeJoint(raw={}) {
   ],[p.jointType==='on'?'外貼孔徑工具：支管內半徑＋開孔徑向間隙。':'內插孔徑工具：支管外半徑＋開孔徑向間隙。',
     '起縫位於接頭方位的對面；本圖為外壁包覆，不是主管板材捲製下料。'],
     {coordinateSystem:'main-outer-wrap',azimuth:p.azimuth,seamRad:rad(p.azimuth)-Math.PI,localArcOffset:mainC/2}));
-  let pad=null,padGap=null,padArea=0,padInnerClearance=null,padOuterClearance=null;
+  let pad=null,padGap=null,padArea=0,padInnerClearance=null,padOuterClearance=null,
+    padHoleAxialLength=null,padHoleArcWidth=null,envelopeEquationError=0;
   if(p.padEnabled) {
     const Rn=R+p.kFactor*p.padThickness,Ro=R+p.padThickness;
+    const formed=p.padManufacturing==='formed-normal',basisRadius=formed?Ro:Rn;
     const pi=sample(padTool,R),po=sample(padTool,Ro),pn=sample(padTool,Rn);
-    const hole=pn.map(s=>s.uv),boundary=padBoundary(p.padShape,hole,p.padMargin,Math.max(128,n),Rn);
+    const envelope=formed?formedNormalEnvelope(p,R,Ro,padTool,sa,ca):null;
+    let envelopeContour;
+    try {envelopeContour=envelope?.sample(n);}catch(e){error('padManufacturing',e.message);return failed();}
+    const hole=formed?envelopeContour.points:pn.map(s=>s.uv);
+    const boundary=padBoundary(p.padShape,hole,p.padMargin,Math.max(128,n),basisRadius);
     const outer=boundary.outer,b=bounds(outer);
     if(b.minX<-EPS||b.maxX>p.mainLength+EPS)error('padMargin','補強板外形跨出主管端部；請移動接頭位置、加長主管或縮小留邊。');
-    if(b.maxY-b.minY>=TAU*Rn-EPS)error('padMargin','補強板展開超過主管一整周，會自我重疊；請縮小尺寸。');
+    if(b.maxY-b.minY>=TAU*basisRadius-EPS)error('padMargin','補強板展開超過主管一整周，會自我重疊；請縮小尺寸。');
     if(errors.length)return failed();
     // Thickness makes an oblique bore migrate axially between faces. A pad
     // enclosing its neutral-layer hole can still have its actual face holes
@@ -337,37 +429,68 @@ export function computeJoint(raw={}) {
       const count=n*4;
       const dense=close(Array.from({length:count},(_,i)=>{
         const s=evalAt(padTool,radius,TAU*i/count);
-        return [s.uv[0],Rn*s.uv[1]/radius];
+        return [s.uv[0],basisRadius*s.uv[1]/radius];
       }));
       const clearance=minimumContourDistance(outer,dense);
       if(clearance<=EPS||dense.some(point=>!pointInPolygon(point,outer)))
-        error('padMargin',`補強板${label}孔緣切穿板外緣，無法形成完整環板；請增大留邊、減少板厚或調整角度。最低留邊設定僅指中性面。`);
+        error('padMargin',`補強板${label}孔緣切穿板外緣，無法形成完整環板；請增大留邊、減少板厚或調整角度。最低留邊設定基準為${formed?'外表面包絡孔':'中性面'}。`);
       return clearance;
     };
     padInnerClearance=faceClearance(R,'內面');
     padOuterClearance=faceClearance(Ro,'外面');
     if(errors.length)return failed();
     padGap=boundary.gap;padArea=Math.abs(signedArea(outer))-Math.abs(signedArea(hole));
-    pad={neutralRadius:Rn,outerUV:outer,innerHoleUV:pi.map(s=>s.uv),outerHoleUV:po.map(s=>s.uv),neutralHoleUV:hole,
+    const idealNeutralExtents=extrema(padTool,Rn);
+    if(formed) {
+      const faceExtents=[extrema(padTool,R),extrema(padTool,Ro)];
+      padHoleAxialLength=Math.max(...faceExtents.map(e=>e.max))-Math.min(...faceExtents.map(e=>e.min));
+      padHoleArcWidth=basisRadius*(envelope.phiMax-envelope.phiMin);
+      for(const point of [...hole,...envelopeContour.probes.flat()]) {
+        envelopeEquationError=Math.max(envelopeEquationError,Math.abs(Math.sqrt(envelope.minimumAt(point).distanceSquared)-padTool));
+      }
+    }else{
+      padHoleAxialLength=idealNeutralExtents.max-idealNeutralExtents.min;
+      padHoleArcWidth=Rn*(Math.asin((p.offset+padTool)/Rn)-Math.asin((p.offset-padTool)/Rn));
+    }
+    const layerUV=radius=>hole.map(([x,u])=>[x,u*radius/basisRadius]);
+    pad={neutralRadius:Rn,outerUV:outer,innerHoleUV:pi.map(s=>s.uv),outerHoleUV:po.map(s=>s.uv),neutralHoleUV:pn.map(s=>s.uv),
       innerHole3D:pi.map(s=>s.world),outerHole3D:po.map(s=>s.world),neutralHole3D:pn.map(s=>s.world),
       innerRadius:R,outerRadius:Ro,split:p.padSplit,
+      manufacturing:p.padManufacturing,developmentRadius:basisRadius,
+      cutHoleUV:hole,
+      cutHoleInnerUV:formed?layerUV(R):pi.map(s=>s.uv),
+      cutHoleOuterUV:formed?layerUV(Ro):po.map(s=>s.uv),
+      cutHoleNeutralUV:formed?layerUV(Rn):pn.map(s=>s.uv),
+      cutHoleInner3D:formed?layerUV(R).map(uv=>cylindricalUVToWorld(uv,R,p.azimuth)):pi.map(s=>s.world),
+      cutHoleOuter3D:formed?layerUV(Ro).map(uv=>cylindricalUVToWorld(uv,Ro,p.azimuth)):po.map(s=>s.world),
+      cutHoleNeutral3D:formed?layerUV(Rn).map(uv=>cylindricalUVToWorld(uv,Rn,p.azimuth)):pn.map(s=>s.world),
+      cutHoleProbesUV:formed?envelopeContour.probes:null,
       outerMidpointsUV:boundary.midpoints,
-      mapping:{coordinateSystem:'main-local-cylindrical',azimuth:p.azimuth,outerBoundaryRadius:Rn}};
-    const padNotes=['外形定義於中性層展開面；最低留邊依中性層孔輪廓計算。',
+      outerProbesUV:boundary.probes,
+      mapping:{coordinateSystem:'main-local-cylindrical',azimuth:p.azimuth,outerBoundaryRadius:basisRadius,
+        basisRadius,manufacturing:p.padManufacturing,
+        developmentBasis:formed?'formed-plate-outer-surface':'neutral-layer'}};
+    const padNotes=formed?[
+      '此樣板貼於已彎補強板外表面，以板厚法線（主管徑向）切割。',
+      `外表面放樣半徑 ${Ro.toFixed(3)} mm；孔為全部連續板厚 [${R.toFixed(3)}, ${Ro.toFixed(3)}] mm 的精確法線包絡。`,
+      'K 係數不參與此外表面放樣；本圖不是平板中性層下料樣板。',
+      '最低留邊依外表面包絡孔計算；灰色理想交線只供設計參考。',
+    ]:['外形定義於中性層展開面；最低留邊依中性層孔輪廓計算。',
       '已檢查板材內外面孔完整包含於外形；最低留邊要求僅套用中性面。',
       `中性層半徑 ${Rn.toFixed(3)} mm，K=${p.kFactor}；實際成形須依材料與設備校正。`,
       '孔線為成形後斜孔的中性層交線；板厚內外孔緣不同，需依成形與修孔工法製作。'];
+    const templateBasis=formed?'已彎板外表面包覆／全厚度法線孔':'中性層板材展開';
     if(p.padSplit==='single') {
-      templates.push(makeTemplate('pad','補強板中性層展開','中性層板材展開',outer,[hole],[
-        {points:pi.map(s=>[s.uv[0],Rn*s.uv[1]/R]),label:'內側孔緣投影',type:'inner-edge'},
-        {points:po.map(s=>[s.uv[0],Rn*s.uv[1]/Ro]),label:'外側孔緣投影',type:'outer-edge'},
+      templates.push(makeTemplate('pad',formed?'已彎補強板法線切孔樣板':'補強板中性層展開',templateBasis,outer,[hole],[
+        {points:pi.map(s=>[s.uv[0],basisRadius*s.uv[1]/R]),label:'內側理想交線投影',type:'inner-edge'},
+        {points:po.map(s=>[s.uv[0],basisRadius*s.uv[1]/Ro]),label:'外側理想交線投影',type:'outer-edge'},
       ],padNotes,pad.mapping));
     } else {
       const axis=p.padSplit==='axial'?1:0,cut=boundary.center[axis];
       let count=0;
       try {
         for(const less of [true,false])for(const piece of splitRegion(outer,hole,axis,cut,less)) {
-          count++;templates.push(makeTemplate(`pad-${count}`,`補強板分片 ${count}`,'中性層板材展開',piece,[],[],[
+          count++;templates.push(makeTemplate(`pad-${count}`,`補強板分片 ${count}`,templateBasis,piece,[],[],[
             ...padNotes,p.padSplit==='axial'?'接縫沿主管軸向。':'接縫沿主管圓周方向。',
             '本輪廓已扣除孔內接縫，不含穿越開孔的重複裁切線。'],{...pad.mapping,splitAxis:axis,splitCoordinate:cut}));
         }
@@ -399,30 +522,54 @@ export function computeJoint(raw={}) {
       const unprojectedWorld=s.world.map((v,j)=>v+shift*direction[j]);
       independentIntersectionError=Math.max(independentIntersectionError,distance(independentPoint,unprojectedWorld));
       if(!shift)roundTripError=Math.max(roundTripError,distance(s.world,cylindricalUVToWorld(s.uv,hostRadius,p.azimuth)));
-      const mid=evalAt(radius,hostRadius,TAU*(i+.5)/n,shift).world;
-      chordError=Math.max(chordError,distance(mid,lerp(series[i].world,series[i+1].world,.5)));
+      for(const fraction of CHORD_FRACTIONS) {
+        const probe=evalAt(radius,hostRadius,TAU*(i+fraction)/n,shift);
+        chordError=Math.max(chordError,distance(probe.world,lerp(series[i].world,series[i+1].world,fraction)));
+        if(!shift)chordError=Math.max(chordError,distance(probe.uv,lerp(series[i].uv,series[i+1].uv,fraction)));
+      }
     }
   }
   if(pad)for(const [radius,uv,world] of [[pad.innerRadius,pad.innerHoleUV,pad.innerHole3D],[pad.outerRadius,pad.outerHoleUV,pad.outerHole3D],[pad.neutralRadius,pad.neutralHoleUV,pad.neutralHole3D]]) {
     uv.forEach((v,i)=>roundTripError=Math.max(roundTripError,distance(world[i],cylindricalUVToWorld(v,radius,p.azimuth))));
-    for(let i=0;i<n;i++)chordError=Math.max(chordError,distance(evalAt(padTool,radius,TAU*(i+.5)/n).world,lerp(world[i],world[i+1],.5)));
+    for(let i=0;i<n;i++)for(const fraction of CHORD_FRACTIONS) {
+      const probe=evalAt(padTool,radius,TAU*(i+fraction)/n),basis=pad.developmentRadius;
+      chordError=Math.max(chordError,distance(probe.world,lerp(world[i],world[i+1],fraction)),distance(
+        [probe.uv[0],probe.uv[1]*basis/radius],lerp([uv[i][0],uv[i][1]*basis/radius],[uv[i+1][0],uv[i+1][1]*basis/radius],fraction)));
+    }
   }
   if(pad)for(let i=0;i<pad.outerUV.length-1;i++) {
-    const aa=pad.outerUV[i],bb=pad.outerUV[i+1],mid=pad.outerMidpointsUV[i],R=pad.neutralRadius;
-    chordError=Math.max(chordError,distance(mid,lerp(aa,bb,.5)),distance(
-      cylindricalUVToWorld(mid,R,p.azimuth),lerp(cylindricalUVToWorld(aa,R,p.azimuth),cylindricalUVToWorld(bb,R,p.azimuth),.5)));
+    const aa=pad.outerUV[i],bb=pad.outerUV[i+1],R=pad.developmentRadius;
+    pad.outerProbesUV[i].forEach((probe,j)=>{
+      const fraction=CHORD_FRACTIONS[j];
+      chordError=Math.max(chordError,distance(probe,lerp(aa,bb,fraction)),distance(
+        cylindricalUVToWorld(probe,R,p.azimuth),lerp(cylindricalUVToWorld(aa,R,p.azimuth),cylindricalUVToWorld(bb,R,p.azimuth),fraction)));
+    });
+  }
+  if(pad?.cutHoleProbesUV)for(let i=0;i<pad.cutHoleUV.length-1;i++) {
+    const aa=pad.cutHoleUV[i],bb=pad.cutHoleUV[i+1],R=pad.developmentRadius;
+    pad.cutHoleProbesUV[i].forEach((probe,j)=>{
+      const fraction=CHORD_FRACTIONS[j];
+      chordError=Math.max(chordError,distance(probe,lerp(aa,bb,fraction)));
+      for(const layer of [pad.innerRadius,pad.neutralRadius,pad.outerRadius]) {
+        const wrap=p=>cylindricalUVToWorld([p[0],p[1]*layer/R],layer,pad.mapping.azimuth);
+        chordError=Math.max(chordError,distance(wrap(probe),lerp(wrap(aa),wrap(bb),fraction)));
+      }
+    });
   }
   const closure=Math.max(...[outerCut,innerCut,oh.map(s=>s.world),ih.map(s=>s.world)].map(points=>distance(points[0],points.at(-1))));
+  const sampledMaxChordError=chordError;
+  chordError*=CHORD_GUARD_FACTOR;
   const verification=[
     {id:'independent-intersection',label:'獨立二次方程求交差',value:independentIntersectionError,unit:'mm',tolerance:p.tolerance,status:independentIntersectionError<=p.tolerance?'pass':'fail'},
     {id:'equations',label:projection?'交線方程誤差（伸入前）':'交線方程誤差',value:equationError,unit:'mm',tolerance:p.tolerance,status:equationError<=p.tolerance?'pass':'fail'},
     {id:'roundtrip',label:'圓柱展開回包誤差',value:roundTripError,unit:'mm',tolerance:p.tolerance,status:roundTripError<=p.tolerance?'pass':'fail'},
     {id:'closure',label:'交線閉合誤差',value:closure,unit:'mm',tolerance:p.tolerance,status:closure<=p.tolerance?'pass':'fail'},
-    {id:'chord',label:'取樣最大中點弦差',value:chordError,unit:'mm',tolerance:p.tolerance,status:chordError<=p.tolerance?'pass':'warning'},
+    {id:'chord',label:'採樣弦差（含數值餘量）',value:chordError,unit:'mm',tolerance:p.tolerance,status:chordError<=p.tolerance?'pass':'warning'},
   ];
-  if(pad)verification.push({id:'pad-margin',label:'補強板中性面最低留邊',value:padGap,unit:'mm',tolerance:p.padMargin,status:padGap>=p.padMargin-1e-7?'pass':'fail'},
-    {id:'pad-inner-fit',label:'內面孔包容餘裕（中性座標）',value:padInnerClearance,unit:'mm',tolerance:0,status:'pass'},
-    {id:'pad-outer-fit',label:'外面孔包容餘裕（中性座標）',value:padOuterClearance,unit:'mm',tolerance:0,status:'pass'});
+  if(pad)verification.push({id:'pad-margin',label:p.padManufacturing==='formed-normal'?'補強板外表面包絡孔最低留邊':'補強板中性面最低留邊',value:padGap,unit:'mm',tolerance:p.padMargin,status:padGap>=p.padMargin-1e-7?'pass':'fail'},
+    {id:'pad-inner-fit',label:`內面孔包容餘裕（${p.padManufacturing==='formed-normal'?'外表面':'中性'}座標）`,value:padInnerClearance,unit:'mm',tolerance:0,status:'pass'},
+    {id:'pad-outer-fit',label:`外面孔包容餘裕（${p.padManufacturing==='formed-normal'?'外表面':'中性'}座標）`,value:padOuterClearance,unit:'mm',tolerance:0,status:'pass'});
+  if(pad&&p.padManufacturing==='formed-normal')verification.push({id:'formed-envelope',label:'全板厚法線包絡方程誤差',value:envelopeEquationError,unit:'mm',tolerance:p.tolerance,status:envelopeEquationError<=p.tolerance?'pass':'fail'});
   if(chordError>p.tolerance)warnings.push(`目前取樣弦差 ${chordError.toFixed(3)} mm 超過 ${p.tolerance} mm；請提高取樣數或放寬離散容差。`);
   if(p.angle<20||p.angle>160)warnings.push('接近主管軸向的斜插會產生很長的開孔與切口，請核對可加工空間。');
   if(p.jointType==='on'&&p.projection>0)warnings.push('伸入量僅用於內插；此外貼接頭未套用伸入量。');
@@ -438,7 +585,70 @@ export function computeJoint(raw={}) {
     branchOuterCutLength:perimeter(outerCut),branchInnerCutLength:perimeter(innerCut),
     mainHoleAxialLength:hb.maxX-hb.minX,mainHoleArcWidth:hb.maxY-hb.minY,mainHoleToolDiameter:2*toolRadius,
     padMinimumMargin:padGap,padNetArea:padArea,padNeutralRadius:pad?.neutralRadius??null,
-    padInnerEdgeClearanceNeutral:padInnerClearance,padOuterEdgeClearanceNeutral:padOuterClearance,
+    padInnerEdgeClearanceNeutral:p.padManufacturing==='neutral'?padInnerClearance:null,
+    padOuterEdgeClearanceNeutral:p.padManufacturing==='neutral'?padOuterClearance:null,
+    padInnerEdgeClearanceBasis:padInnerClearance,padOuterEdgeClearanceBasis:padOuterClearance,
+    padDevelopmentRadius:pad?.developmentRadius??null,padHoleAxialLength,padHoleArcWidth,
     mainSeamAzimuth:((p.azimuth+180)%360),projectedLength:projection};
-  return {valid:true,params:p,errors,warnings,templates,geometry,verification,measurements,stationTable};
+  return {valid:true,params:p,errors,warnings,templates,geometry,verification,measurements,stationTable,
+    sampling:{sampledMaxChordError,guardFactor:CHORD_GUARD_FACTOR}};
+}
+
+/** Iterative precision controller. Analytic geometry is recalculated at a
+ * higher polygon density; this never recursively calls computeJoint.
+ * The check uses interior samples, not a rigorous global error theorem.
+ */
+export function computeJoint(raw={}) {
+  const requestedSamples=Number(raw.samples??DEFAULT_PARAMS.samples);
+  let result=computeJointAtSamples(raw),effectiveSamples=result.params.samples;
+  const auto=result.params.autoPrecision;
+  let maxChordError=result.verification.find(v=>v.id==='chord')?.value??null;
+  while(result.valid&&auto&&maxChordError>result.params.tolerance&&effectiveSamples<PRECISION_SAMPLE_CAP) {
+    const ratio=Math.sqrt(maxChordError/result.params.tolerance);
+    const next=Math.min(PRECISION_SAMPLE_CAP,Math.max(effectiveSamples+4,Math.ceil(effectiveSamples*Math.max(1.35,ratio*1.12)/4)*4));
+    result=computeJointAtSamples({...raw,samples:next});effectiveSamples=result.params.samples;
+    maxChordError=result.verification.find(v=>v.id==='chord')?.value??null;
+  }
+  const metTolerance=result.valid&&maxChordError!==null&&maxChordError<=result.params.tolerance;
+  const precision={requestedSamples,effectiveSamples,cap:PRECISION_SAMPLE_CAP,auto,
+    metTolerance,maxChordError,tolerance:result.params.tolerance,
+    sampledMaxChordError:result.sampling?.sampledMaxChordError??null,guardFactor:CHORD_GUARD_FACTOR,
+    method:'sampled-interior-eighth-points-with-numerical-margin'};
+  if(result.valid&&auto&&!metTolerance) {
+    return {...result,valid:false,geometry:null,templates:[],stationTable:[],
+      errors:[...result.errors,{field:'tolerance',message:`自動精度已達 ${PRECISION_SAMPLE_CAP} 段上限，取樣弦差 ${maxChordError.toPrecision(5)} mm 仍超過 ${result.params.tolerance} mm。請調整容差或幾何；已停止製作輸出。`}],
+      precision,manufacturingReady:false};
+  }
+  const manufacturingReady=result.valid&&metTolerance&&result.verification.every(v=>v.status!=='fail');
+  if(result.valid&&!manufacturingReady)result.warnings.push('離散輪廓僅供預覽；尚未達製作容差，請提高取樣數或開啟自動精度。');
+  return {...result,precision,manufacturingReady};
+}
+
+/** Exact branch angular stations, independent of display polygon resolution.
+ * Input may be a successful computeJoint result (preferred) or raw params.
+ * Returns N+1 stations including 360°, using the same straight-end datum as
+ * the 3D model. No interpolation of stationTable or mesh vertices is used.
+ */
+export function computeExactStationTable(input,segments=12) {
+  if(!Number.isInteger(segments)||segments<1||segments>PRECISION_SAMPLE_CAP)
+    throw new RangeError(`分點區段須為 1 至 ${PRECISION_SAMPLE_CAP} 的整數。`);
+  const joint=input?.params&&typeof input.valid==='boolean'?input:
+    computeJoint({...input,padEnabled:false,autoPrecision:false});
+  if(!joint.valid||!joint.geometry)throw new RangeError('無效接頭無法產生精確分點表。');
+  const p=joint.params,a=rad(p.angle),sa=Math.sin(a),ca=Math.cos(a);
+  const R=p.jointType==='on'?p.mainOD/2+p.rootGap:p.mainOD/2-p.mainWall;
+  const ro=p.branchOD/2,ri=ro-p.branchWall,projection=p.jointType==='in'?p.projection:0;
+  const endT=joint.geometry.branch.axisEnd;
+  const cutT=(radius,theta)=>(Math.sqrt(R*R-(p.offset+radius*Math.sin(theta))**2)-radius*Math.cos(theta)*ca)/sa-projection;
+  const cutPoint=(radius,theta)=>{
+    const t=cutT(radius,theta);
+    return rotateAroundMain([p.jointPosition-radius*Math.cos(theta)*sa+t*ca,
+      p.offset+radius*Math.sin(theta),radius*Math.cos(theta)*ca+t*sa],p.azimuth);
+  };
+  return Array.from({length:segments+1},(_,i)=>{
+    const theta=i===segments?0:TAU*i/segments;
+    return {station:i,angle:360*i/segments,circumference:TAU*ro*i/segments,
+      outerDepth:endT-cutT(ro,theta),innerDepth:endT-cutT(ri,theta),
+      outerPoint:cutPoint(ro,theta),innerPoint:cutPoint(ri,theta)};
+  });
 }

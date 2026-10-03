@@ -119,18 +119,23 @@ export class JointViewer {
     this.line(b.outerCut,0xa7e8ff,this.parts.branch);this.line(b.outerEnd,0xa7e8ff,this.parts.branch);
     this.line([b.outerCut[0],b.outerEnd[0]],0xc6f0ff,this.parts.branch,true);
     if(pad) {
-      const innerOuter=pad.outerUV.map(([x,u])=>[x,u*pad.innerRadius/pad.neutralRadius]);
-      const outerOuter=pad.outerUV.map(([x,u])=>[x,u*pad.outerRadius/pad.neutralRadius]);
-      this.mesh(surface(innerOuter,[pad.innerHoleUV],pad.innerRadius,p.azimuth,true),padMat.clone(),this.parts.pad);
-      this.mesh(surface(outerOuter,[pad.outerHoleUV],pad.outerRadius,p.azimuth),padMat.clone(),this.parts.pad);
+      const basisRadius=pad.developmentRadius??pad.neutralRadius;
+      const innerOuter=pad.outerUV.map(([x,u])=>[x,u*pad.innerRadius/basisRadius]);
+      const outerOuter=pad.outerUV.map(([x,u])=>[x,u*pad.outerRadius/basisRadius]);
+      const formed=pad.manufacturing==='formed-normal';
+      const innerHole=formed?pad.cutHoleUV.map(([x,u])=>[x,u*pad.innerRadius/basisRadius]):pad.innerHoleUV;
+      const outerHole=formed?pad.cutHoleUV.map(([x,u])=>[x,u*pad.outerRadius/basisRadius]):pad.outerHoleUV;
+      const innerHole3D=formed?pad.cutHoleInner3D:pad.innerHole3D,outerHole3D=formed?pad.cutHoleOuter3D:pad.outerHole3D;
+      this.mesh(surface(innerOuter,[innerHole],pad.innerRadius,p.azimuth,true),padMat.clone(),this.parts.pad);
+      this.mesh(surface(outerOuter,[outerHole],pad.outerRadius,p.azimuth),padMat.clone(),this.parts.pad);
       const a=innerOuter.map(uv=>cylindricalUVToWorld(uv,pad.innerRadius,p.azimuth));
       const c=outerOuter.map(uv=>cylindricalUVToWorld(uv,pad.outerRadius,p.azimuth));
-      this.mesh(loft(a,c),padMat.clone(),this.parts.pad);this.mesh(loft(pad.innerHole3D,pad.outerHole3D),padMat.clone(),this.parts.pad);
-      this.line(c,0xffd099,this.parts.pad);this.line(pad.outerHole3D,0xffd099,this.parts.pad);
+      this.mesh(loft(a,c),padMat.clone(),this.parts.pad);this.mesh(loft(innerHole3D,outerHole3D),padMat.clone(),this.parts.pad);
+      this.line(c,0xffd099,this.parts.pad);this.line(outerHole3D,0xffd099,this.parts.pad);
       // Trace actual split-piece boundaries on the formed outer face.
       if(pad.split!=='single')for(const t of result.templates.filter(t=>t.id.startsWith('pad-'))) {
         const uv=t.outer.map(([x,u])=>[x+t.mapping.origin[0],u+t.mapping.origin[1]]);
-        this.line(uv.map(([x,u])=>cylindricalUVToWorld([x,u*pad.outerRadius/pad.neutralRadius],pad.outerRadius+.2,p.azimuth)),0x72491d,this.parts.pad);
+        this.line(uv.map(([x,u])=>cylindricalUVToWorld([x,(u/basisRadius)*(pad.outerRadius+.2)],pad.outerRadius+.2,p.azimuth)),0x72491d,this.parts.pad);
       }
     }
     mainMat.dispose();branchMat.dispose();padMat.dispose();
@@ -170,6 +175,10 @@ export class JointViewer {
     if(!this.available||!this.result?.valid)return;
     const pts=this.result.geometry.branch.outerCut,pt=pts[Math.min(pts.length-1,index)];
     this.marker.position.set(...pt);this.marker.position.add(this.parts.branch.position);this.marker.visible=true;this.render();
+  }
+  highlightPoint(point) {
+    if(!this.available||!this.result?.valid||!Array.isArray(point)||point.length!==3)return;
+    this.marker.position.set(...point);this.marker.position.add(this.parts.branch.position);this.marker.visible=true;this.render();
   }
   render() {if(this.renderer&&this.scene&&this.camera)this.renderer.render(this.scene,this.camera);}
   image() {if(!this.available)return '';this.render();return this.renderer.domElement.toDataURL('image/png');}

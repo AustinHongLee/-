@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 // Import through a data URL so this test does not require package.json type=module.
-const source = await readFile(new URL('../dist/assets/exports.js', import.meta.url), 'utf8');
+const source = await readFile(process.env.PIPE_EXPORTS_TEST_SOURCE ?? new URL('../dist/assets/exports.js', import.meta.url), 'utf8');
 const mod = await import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}`);
 const params = { mainOD: 324, mainWall: 8, mainLength: 1000, jointPosition: 500, branchOD: 168, branchWall: 6,
   branchLength: 450, angle: 60, azimuth: 15, offset: 0, jointType: 'in', projection: 0,
@@ -110,7 +110,7 @@ check('Landscape A3 dimensions and multipart selection share the same page plan'
   const html = mod.buildReportHTML(r, {}, { paper: 'A3', orientation: 'landscape', parts: ['pad'] });
   assert.match(html, /@page \{ size: 420mm 297mm/);
 });
-const kernelSource = await readFile(new URL('../dist/assets/geometry.js', import.meta.url), 'utf8');
+const kernelSource = await readFile(process.env.PIPE_GEOMETRY_TEST_SOURCE ?? new URL('../dist/assets/geometry.js', import.meta.url), 'utf8');
 const kernel = await import(`data:text/javascript;base64,${Buffer.from(kernelSource).toString('base64')}`);
 check('Paper station tables retain exact values and the closing row in all paper orientations', () => {
   const r = kernel.computeJoint(kernel.DEFAULT_PARAMS);
@@ -135,10 +135,10 @@ check('Paper station tables retain exact values and the closing row in all paper
     }
   }
   // The UI may supply its already-selected table: never silently resample it.
-  const selectedRows = r.stationTable.filter((_, i) => i % 15 === 0);
+  const selectedRows = kernel.computeExactStationTable(r, 24);
   const selectedPlan = mod.reportPagePlan({ ...r, stationTable: selectedRows });
   assert.equal(selectedPlan.stationRowCount, 25);
-  assert.deepEqual(selectedPlan.stationSheets.flatMap(sheet => sheet.rows), selectedRows);
+  assert.deepEqual(selectedPlan.stationSheets.flatMap(sheet => sheet.rows), selectedRows.map(row => Object.fromEntries(['angle', 'circumference', 'outerDepth', 'innerDepth'].map(key => [key, row[key]]))));
   assert.throws(() => mod.reportPagePlan(r, { stationCount: 17 }), /放樣分點數/);
   assert.throws(() => mod.reportPagePlan(result, { stationCount: 24 }), /缺少/);
   assert.throws(() => mod.reportPagePlan({ ...r, stationTable: [{ angle: 0, circumference: NaN, outerDepth: 1 }] }), /有限數值/);
@@ -163,5 +163,89 @@ check('Actual geometry kernel output exports in both joint modes and all split m
       assert.ok(mod.templateDXF(t).endsWith('0\r\nEOF\r\n'));
     }
   }
+});
+check('New manufacturing parameters round-trip without changing legacy projects', () => {
+  const enhanced = { ...params, padManufacturing: 'formed-normal', autoPrecision: true, samples: 4096 };
+  assert.deepEqual(mod.readProjectJSON(mod.projectJSON(enhanced)).params, enhanced);
+  assert.deepEqual(mod.readProjectJSON(mod.projectJSON(params)).params, params);
+  assert.throws(() => mod.projectJSON({ ...params, padManufacturing: 'outer' }), /選項/);
+  assert.throws(() => mod.projectJSON({ ...params, autoPrecision: 'true' }), /布林/);
+  assert.throws(() => mod.projectJSON({ ...params, precisionCap: 4096 }), /不支援/);
+  assert.throws(() => mod.projectJSON({ ...params, samples: 4097 }), /4096/);
+});
+check('Local main opening preserves every hole vertex and carries real positioning references', () => {
+  const r = kernel.computeJoint({ ...kernel.DEFAULT_PARAMS, offset: 15, azimuth: 45 });
+  assert.equal(r.valid, true);
+  const main = r.templates.find(t => t.id === 'main');
+  const before = structuredClone(main);
+  const patch = mod.createMainOpeningPatch(r, { margin: 25 });
+  assert.equal(patch.id, 'main-local');
+  assert.equal(patch.outerRole, 'paper-boundary');
+  assert.ok(patch.width < main.width);
+  assert.ok(patch.height < main.height);
+  for (let h = 0; h < main.holes.length; h++) for (let i = 0; i < main.holes[h].length; i++) {
+    assert.ok(Math.abs(patch.holes[h][i][0] + patch.mapping.cropOrigin[0] - main.holes[h][i][0]) < 1e-10);
+    assert.ok(Math.abs(patch.holes[h][i][1] + patch.mapping.cropOrigin[1] - main.holes[h][i][1]) < 1e-10);
+  }
+  assert.deepEqual(main, before);
+  assert.ok(patch.references.some(ref => ref.label.startsWith('A：X')));
+  assert.ok(patch.references.every(ref => ref.points.every(([x, y]) => x >= -1e-7 && x <= patch.width + 1e-7 && y >= -1e-7 && y <= patch.height + 1e-7)));
+  assert.ok(patch.notes.some(note => note.includes('逆時針')));
+  assert.ok(patch.notes.some(note => note.includes('主管基準端')));
+  const svg = mod.templateSVG(patch, { id: 'J-12<script>', revision: 'B' });
+  assert.ok(svg.includes('J-12&lt;script&gt;'));
+  assert.ok(svg.includes('data-layer="PAPER_BOUNDARY"'));
+  const dxf = mod.templateDXF(patch, { id: 'J-12', revision: 'B' });
+  assert.ok(dxf.includes('JOINT_ID=J-12'));
+  assert.match(dxf, /LWPOLYLINE[\s\S]*?8\r\nPAPER_BOUNDARY[\s\S]*?8\r\nCUT_HOLE/);
+  const edge = kernel.computeJoint({ ...kernel.DEFAULT_PARAMS, angle: 90, jointPosition: 52, padEnabled: false });
+  assert.equal(edge.valid, true, JSON.stringify(edge.errors));
+  const nearEnd = mod.createMainOpeningPatch(edge, { margin: 25 });
+  assert.equal(nearEnd.mapping.origin[1], 0);
+  assert.ok(nearEnd.notes.some(note => note.includes('留邊在主管端部')));
+  const fullPoints = edge.templates.find(t => t.id === 'main').holes[0];
+  assert.equal(nearEnd.holes[0].length, fullPoints.length); // repeat the closing vertex to preserve the kernel template contract
+});
+check('Report auto orientation chooses minimum pages, preserves full wrap, and distinguishes manufacturing modes', () => {
+  for (const padManufacturing of ['neutral', 'formed-normal']) {
+    const r = kernel.computeJoint({ ...kernel.DEFAULT_PARAMS, padManufacturing });
+    assert.equal(r.valid, true, JSON.stringify(r.errors));
+    const selected = { ...r, stationTable: kernel.computeExactStationTable(r, 24) };
+    const options = { paper: 'A4', mainPattern: 'local', orientation: 'auto' };
+    const suggestion = mod.suggestReportOptions(selected, options);
+    const p = mod.reportPagePlan(selected, { ...options, orientation: 'portrait' });
+    const l = mod.reportPagePlan(selected, { ...options, orientation: 'landscape' });
+    assert.equal(suggestion.pages, Math.min(p.totalPages, l.totalPages));
+    assert.equal(mod.estimateReportPages(selected, options), suggestion.pages);
+    const full = mod.reportPagePlan(selected, { ...options, orientation: 'portrait', mainPattern: 'full' });
+    assert.ok(full.parts.find(p => p.template.id === 'main').template.width > p.parts.find(p => p.template.id === 'main').template.width);
+    const html = mod.buildReportHTML(selected, { id: 'J-AUTO' }, options);
+    assert.equal((html.match(/<section class="page /g) ?? []).length, suggestion.pages);
+    assert.ok(html.includes('現場製作摘要'));
+    assert.ok(html.includes('主管周向弧長沿逆時針增加'));
+    assert.ok(html.includes('由自由直端面朝接頭看'));
+    assert.ok(html.includes('100%'));
+    if (padManufacturing === 'formed-normal') {
+      assert.ok(html.includes('全板厚法線切孔包絡'));
+      assert.ok(html.includes('中性層 K 不參與'));
+      assert.ok(!html.includes('<th>中性層係數 K</th>'));
+    } else assert.ok(html.includes('中性層展開供板材下料'));
+    assert.equal(mod.fabricationReadiness({ ...selected, manufacturingReady: false }).ready, false);
+    assert.equal(mod.fabricationReadiness({ ...selected, precision: { metTolerance: false } }).ready, false);
+  }
+});
+check('Fabrication numeric resolution and station precision follow the stated tolerance', () => {
+  const fine = { ...result, params: { ...params, tolerance: 0.00001 }, stationTable: [{ angle: 0, circumference: 0, outerDepth: 12.12345678, innerDepth: 12.12345567 }] };
+  const html = mod.buildReportHTML(fine);
+  assert.ok(html.includes('<td>12.123457</td>'));
+  assert.ok(html.includes('<td>12.123456</td>'));
+  const tooFine = { ...fine, params: { ...fine.params, tolerance: 0.000001 } };
+  assert.match(mod.fabricationReadiness(tooFine).reason, /解析度下限/);
+  assert.throws(() => mod.buildReportHTML(tooFine), /解析度下限/);
+  const precision = { requestedSamples: 360, effectiveSamples: 720, sampledMaxChordError: 0.03, guardFactor: 1.1, maxChordError: 0.033, tolerance: 0.1, auto: true, metTolerance: true };
+  const guarded = mod.buildReportHTML({ ...result, precision });
+  assert.ok(guarded.includes('每段 7 個內部點'));
+  assert.ok(guarded.includes('0.03 mm × 1.1'));
+  assert.ok(guarded.includes('並非連續曲線誤差的嚴格數學上界'));
 });
 console.log(`${checks} export checks passed.`);

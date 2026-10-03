@@ -1,12 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {computeJoint,rotateAroundMain,cylindricalUVToWorld,minimumContourDistance} from '../dist/assets/geometry.js';
+import {computeJoint,rotateAroundMain,cylindricalUVToWorld,minimumContourDistance,computeExactStationTable,PRECISION_SAMPLE_CAP} from '../dist/assets/geometry.js';
 
 const near=(actual,expected,tolerance=1e-8)=>assert.ok(Math.abs(actual-expected)<=tolerance,`${actual} differs from ${expected}`);
 const norm=p=>Math.hypot(...p);
 const sub=(a,b)=>a.map((v,i)=>v-b[i]);
 const dot=(a,b)=>a.reduce((sum,v,i)=>sum+v*b[i],0);
-const params={samples:72,padEnabled:false};
+const TAU=2*Math.PI;
+const params={samples:72,padEnabled:false,autoPrecision:false};
 function requireValid(p={}) {const r=computeJoint({...params,...p});assert.equal(r.valid,true,JSON.stringify(r.errors));return r;}
 function area(poly) {return Math.abs(poly.slice(0,-1).reduce((s,p,i)=>s+p[0]*poly[i+1][1]-poly[i+1][0]*p[1],0)/2);}
 
@@ -229,4 +230,151 @@ test('disabled repad is absent and explicit radial root gap increases fishmouth 
   assert.equal(r.geometry.pad,null);
   assert.equal(r.templates.length,2);
   r.geometry.branch.outerCut.forEach(p=>near(Math.hypot(p[1],p[2]),102));
+});
+
+const formedCase={padEnabled:true,padManufacturing:'formed-normal',mainLength:1600,jointPosition:800,padClearance:0};
+
+test('formed-normal exact hole envelope reproduces all three dimensional references',()=>{
+  for(const [p,width,height] of [
+    [{mainOD:200,branchOD:100,angle:52,padThickness:6,padClearance:0},131.58953526629818,111.00294042683937],
+    [{mainOD:219.1,branchOD:114.3,angle:45,padThickness:6,padClearance:0},167.64461017924486,126.83195311124098],
+    [{mainOD:200,branchOD:100,angle:30,padThickness:12,padClearance:1},224.78460969082653,119.88139302173437],
+  ]) {
+    const r=requireValid({...formedCase,...p,samples:360});
+    near(r.measurements.padHoleAxialLength,width,1e-8);near(r.measurements.padHoleArcWidth,height,1e-8);
+    near(r.geometry.pad.developmentRadius,p.mainOD/2+p.padThickness);
+    assert.equal(r.geometry.pad.mapping.developmentBasis,'formed-plate-outer-surface');
+    assert.equal(r.verification.find(v=>v.id==='formed-envelope').status,'pass');
+    assert.ok(r.verification.find(v=>v.id==='formed-envelope').value<1e-7);
+  }
+});
+
+// Generic world-space point-to-axis distance, minimizing independently over
+// thickness with a golden-section search. It knows no envelope x-side formula.
+function worldDistanceToBranch(r,[x,u],rho) {
+  const pad=r.geometry.pad,p=cylindricalUVToWorld([x,u*rho/pad.developmentRadius],rho,r.params.azimuth);
+  const v=sub(p,r.geometry.axes.branchOrigin),b=r.geometry.axes.branchDirection,t=dot(v,b);
+  return norm(v.map((v,i)=>v-t*b[i]));
+}
+function goldenMinimum(fn,lo,hi) {
+  const q=(Math.sqrt(5)-1)/2;
+  let x=hi-q*(hi-lo),y=lo+q*(hi-lo),fx=fn(x),fy=fn(y);
+  for(let i=0;i<90;i++) {
+    if(fx<fy){hi=y;y=x;fy=fx;x=hi-q*(hi-lo);fx=fn(x);}
+    else{lo=x;x=y;fx=fy;y=lo+q*(hi-lo);fy=fn(y);}
+  }
+  return Math.min(fn(lo),fn(hi),fx,fy);
+}
+
+test('continuous-thickness envelope agrees with independent world minimization and exceeds two-face union',()=>{
+  for(const [offset,azimuth,angle] of [[0,0,52],[23,74,30],[-23,231,127]]) {
+    const r=requireValid({...formedCase,offset,azimuth,angle,padThickness:12,samples:144});
+    const pad=r.geometry.pad,b=r.params.branchOD/2+r.params.padClearance;
+    let interiorOnly=false;
+    for(const uv of pad.cutHoleUV) {
+      const minimum=goldenMinimum(rho=>worldDistanceToBranch(r,uv,rho),pad.innerRadius,pad.outerRadius);
+      near(minimum,b,1e-6);
+      if(Math.min(worldDistanceToBranch(r,uv,pad.innerRadius),worldDistanceToBranch(r,uv,pad.outerRadius))>b+.001)
+        interiorOnly=true;
+    }
+    assert.equal(interiorOnly,true,'interior thickness must affect at least one boundary station');
+    pad.cutHoleUV.forEach((uv,i)=>{
+      near(norm(sub(cylindricalUVToWorld([uv[0],uv[1]*pad.innerRadius/pad.developmentRadius],pad.innerRadius,azimuth),pad.cutHoleInner3D[i])),0);
+      near(norm(sub(cylindricalUVToWorld(uv,pad.outerRadius,azimuth),pad.cutHoleOuter3D[i])),0);
+    });
+  }
+});
+
+test('offset equal to tool radius retains its real zero-angle connecting edge',()=>{
+  for(const offset of [-20,20]) {
+    const r=requireValid({...formedCase,branchOD:40,branchWall:2,offset,angle:52,padThickness:12,samples:144});
+    const vertices=r.geometry.pad.cutHoleUV.filter(p=>Math.abs(p[1])<1e-8);
+    assert.ok(vertices.length>=2);
+    const span=Math.max(...vertices.map(p=>p[0]))-Math.min(...vertices.map(p=>p[0]));
+    near(span,12/Math.tan(52*Math.PI/180),1e-6);
+    assert.deepEqual(r.geometry.pad.cutHoleUV[0],r.geometry.pad.cutHoleUV.at(-1));
+  }
+});
+
+test('formed-normal outside-surface hole and templates are independent of K factor',()=>{
+  const a=requireValid({...formedCase,kFactor:.2}),b=requireValid({...formedCase,kFactor:.8});
+  assert.deepEqual(a.geometry.pad.cutHoleUV,b.geometry.pad.cutHoleUV);
+  assert.deepEqual(a.templates.filter(t=>t.id.startsWith('pad')),b.templates.filter(t=>t.id.startsWith('pad')));
+  assert.notEqual(a.geometry.pad.neutralRadius,b.geometry.pad.neutralRadius);
+  const n=requireValid({...formedCase,padManufacturing:'neutral',kFactor:.2});
+  assert.notEqual(n.geometry.pad.developmentRadius,a.geometry.pad.developmentRadius);
+  assert.notDeepEqual(n.geometry.pad.cutHoleUV,a.geometry.pad.cutHoleUV);
+});
+
+for(const shape of ['circle','ellipse','obround','rounded'])for(const split of ['single','axial','circumferential']) {
+  test(`formed-normal ${shape}/${split} has complete material and split contours`,()=>{
+    const r=requireValid({...formedCase,padShape:shape,padSplit:split,offset:15,angle:60,padThickness:10});
+    const pad=r.geometry.pad,pieces=r.templates.filter(t=>t.id.startsWith('pad'));
+    assert.equal(pieces.length,split==='single'?1:2);
+    assert.ok(minimumContourDistance(pad.outerUV,pad.cutHoleUV)>=35-1e-7);
+    const sum=pieces.reduce((s,t)=>s+area(t.outer)-t.holes.reduce((s,h)=>s+area(h),0),0);
+    near(sum,area(pad.outerUV)-area(pad.cutHoleUV),1e-5);
+    assert.ok(pieces.every(t=>t.mapping.basisRadius===110));
+  });
+}
+
+test('automatic precision increases resolution iteratively to the requested sampled chord tolerance',()=>{
+  const r=requireValid({...formedCase,angle:30,padThickness:12,offset:20,samples:36,tolerance:.002,autoPrecision:true});
+  assert.ok(r.precision.effectiveSamples>36);
+  assert.equal(r.precision.requestedSamples,36);
+  assert.equal(r.params.samples,r.precision.effectiveSamples);
+  assert.equal(r.precision.metTolerance,true);
+  assert.ok(r.precision.maxChordError<=.002);
+  assert.equal(r.manufacturingReady,true);
+});
+
+test('controller-transition peak uses dense probes and disclosed numerical guard before allowing fabrication',()=>{
+  const p={...formedCase,mainLength:10000,jointPosition:5000,angle:90,offset:20,
+    padThickness:30,padMargin:55,padShape:'ellipse',padClearance:1,samples:300,tolerance:.0167};
+  const manual=requireValid({...p,autoPrecision:false});
+  assert.equal(manual.manufacturingReady,false);
+  assert.ok(manual.precision.maxChordError>.0167);
+  assert.equal(manual.precision.guardFactor,1.1);
+  near(manual.precision.maxChordError,manual.precision.sampledMaxChordError*1.1);
+  const auto=requireValid({...p,autoPrecision:true});
+  assert.ok(auto.precision.effectiveSamples>300);
+  assert.equal(auto.manufacturingReady,true);
+});
+
+test('manual coarse geometry remains previewable and fabrication readiness is false',()=>{
+  const r=requireValid({angle:25,samples:36,tolerance:.001,mainLength:1800,jointPosition:900,autoPrecision:false});
+  assert.equal(r.precision.effectiveSamples,36);
+  assert.equal(r.precision.metTolerance,false);
+  assert.equal(r.manufacturingReady,false);
+  assert.ok(r.templates.length>0);
+});
+
+test('automatic precision stops fabrication clearly when the cap cannot satisfy tolerance',()=>{
+  const r=computeJoint({...params,angle:25,samples:36,tolerance:1e-10,mainLength:1800,jointPosition:900,autoPrecision:true});
+  assert.equal(r.valid,false);assert.equal(r.manufacturingReady,false);
+  assert.equal(r.precision.effectiveSamples,PRECISION_SAMPLE_CAP);
+  assert.equal(r.precision.cap,4096);
+  assert.equal(r.precision.metTolerance,false);
+  assert.equal(r.templates.length,0);
+  assert.ok(r.errors.some(e=>e.field==='tolerance'&&e.message.includes('4096')));
+});
+
+test('exact station helper uses analytic geometry at arbitrary divisions rather than mesh interpolation',()=>{
+  const r=requireValid({samples:36,angle:43,offset:-17,azimuth:214,jointType:'in',projection:8});
+  const stations=computeExactStationTable(r,23),p=r.params,a=p.angle*Math.PI/180,b=[Math.cos(a),0,Math.sin(a)];
+  assert.equal(stations.length,24);
+  stations.forEach((row,i)=>{
+    const theta=i===23?0:TAU*i/23;
+    const foot=[p.jointPosition-50*Math.cos(theta)*Math.sin(a),p.offset+50*Math.sin(theta),50*Math.cos(theta)*Math.cos(a)];
+    const roots=lineCylinder(foot,b,94);
+    near(row.outerDepth,r.geometry.branch.axisEnd-roots[1]+8,1e-7);
+    const expected=rotateAroundMain(foot.map((v,j)=>v+(roots[1]-8)*b[j]),p.azimuth);
+    row.outerPoint.forEach((v,j)=>near(v,expected[j],1e-7));
+  });
+  const station1=stations[1],meshIndex=36/23,lo=Math.floor(meshIndex),t=meshIndex-lo;
+  const interpolated=r.stationTable[lo].outerDepth+(r.stationTable[lo+1].outerDepth-r.stationTable[lo].outerDepth)*t;
+  assert.ok(Math.abs(station1.outerDepth-interpolated)>.001);
+  near(stations[23].outerDepth,stations[0].outerDepth);
+  assert.deepEqual(computeExactStationTable(r.params,23),stations);
+  assert.throws(()=>computeExactStationTable(r,0),RangeError);
 });
