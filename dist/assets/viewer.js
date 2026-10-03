@@ -11,7 +11,7 @@ function elbowSurface(e,r,hole,inward=false) {
   const phi=e.surfaceClock,lo=phi-Math.PI,hi=phi+Math.PI,R=e.bendRadius;
   const outer=[[0,r*lo],[R*e.bendAngle,r*lo],[R*e.bendAngle,r*hi],[0,r*hi],[0,r*lo]];
   const shape=new THREE.Shape(open(outer).map(p=>new THREE.Vector2(...p)));
-  shape.holes=[path(open(hole))];
+  shape.holes=hole?.length?[path(open(hole))]:[];
   const flat=new THREE.ShapeGeometry(shape),attr=flat.getAttribute('position');
   const indices=flat.index?.array??Array.from({length:attr.count},(_,i)=>i),positions=[],normals=[];
   const add=(a,b,c,depth=0)=>{
@@ -128,13 +128,14 @@ export class JointViewer {
     if(p.hostType==='elbow') {
       const e=result.geometry.elbow;
       for(const[r,hole,inward]of[[e.outerRadius,e.outerHoleUV,false],[e.innerRadius,e.innerHoleUV,true]])this.mesh(elbowSurface(e,r,hole,inward),mainMat.clone(),this.parts.main);
-      this.mesh(loft(e.outerHole3D,e.innerHole3D),mainMat.clone(),this.parts.main);
+      if(e.motherOpening!==false)this.mesh(loft(e.outerHole3D,e.innerHole3D),mainMat.clone(),this.parts.main);
       const ring=(beta,r)=>Array.from({length:97},(_,i)=>torusSurfacePoint(beta,TAU*i/96,e.bendRadius,r));
       for(const beta of[0,e.bendAngle]){this.mesh(loft(ring(beta,e.outerRadius),ring(beta,e.innerRadius)),mainMat.clone(),this.parts.main);this.line(ring(beta,e.outerRadius),0xa7bbd0,this.parts.main);}
-      this.line(e.outerHole3D,0xc4d4e8,this.parts.main);
+      if(e.motherOpening===false)this.line(e.outerContact3D,0xe5a343,this.parts.main,true);else this.line(e.outerHole3D,0xc4d4e8,this.parts.main);
       for(const phi of[0,Math.PI])this.line(Array.from({length:65},(_,i)=>torusSurfacePoint(e.bendAngle*i/64,phi,e.bendRadius,e.outerRadius+.3)),0x677e99,this.parts.main,true);
       const a=elbowFrame(0,e.bendRadius),end=elbowFrame(e.bendAngle,e.bendRadius),labelSize=Math.max(12,p.mainOD*.12);
       this.label('A 端',a.center.map((v,i)=>v-a.tangent[i]*labelSize*1.5),this.parts.main,labelSize);
+      if(axes.reference){const ref=axes.reference,len=b.axisEnd+p.mainOD,guide=this.line([ref.center,axes.branchOrigin.map((v,i)=>v+axes.branchDirection[i]*len)],0xffd16a,this.parts.main,true);guide.material.depthTest=false;guide.renderOrder=10;}
       this.label('B 端',end.center.map((v,i)=>v+end.tangent[i]*labelSize*1.5),this.parts.main,labelSize);
     } else {
     const ring=(x,r)=>Array.from({length:97},(_,i)=>cylindricalUVToWorld([x,r*(-Math.PI+TAU*i/96)],r,p.azimuth));
@@ -197,7 +198,9 @@ export class JointViewer {
     this.resize();
     this.view=view;
     const box=new THREE.Box3().setFromObject(this.model),center=box.getCenter(new THREE.Vector3()),size=box.getSize(new THREE.Vector3());
-    const dir=view==='front'?new THREE.Vector3(0,-1,.04):view==='side'?new THREE.Vector3(1,0,.04):new THREE.Vector3(1,-1.5,1.1).normalize();
+    const elbowPlan=this.result.params.hostType==='elbow'&&view==='front';
+    this.camera.up.set(0,elbowPlan?1:0,elbowPlan?0:1);
+    const dir=elbowPlan?new THREE.Vector3(0,0,1):view==='front'?new THREE.Vector3(0,-1,.04):view==='side'?new THREE.Vector3(1,0,.04):new THREE.Vector3(1,-1.5,1.1).normalize();
     this.camera.position.copy(center).add(dir);this.camera.lookAt(center);this.camera.updateMatrixWorld();
     const inverse=this.camera.matrixWorldInverse, projected=[];
     this.model.updateMatrixWorld(true);

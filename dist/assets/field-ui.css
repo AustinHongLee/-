@@ -10,3 +10,5 @@
 .elbow-point-table td:first-child,.elbow-point-table th:first-child{text-align:left}
 .elbow-point-table button{min-width:50px;min-height:36px}
 #elbow-position-diagram svg{display:block;width:100%;max-width:320px;margin:6px auto}
+
+.connection-options .closed-mother-option{grid-column:1/-1;min-height:66px}

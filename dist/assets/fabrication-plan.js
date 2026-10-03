@@ -5,7 +5,7 @@ export const FIT_COUNTS = [4, 8, 12, 24];
 const NUMBER_KEYS = ['stock','markError','cutError','kerf','gapMin','gapMax','bevelAngle','rootFace'];
 const TEXT_LIMITS = {wpsId:100,gapBasis:180,weldNote:500,disposition:500,inspectionKey:10000};
 const PARAM_KEYS = ['mainOD','mainWall','mainLength','jointPosition','branchOD','branchWall','branchLength','angle','azimuth','offset','jointType','projection','rootGap','holeGap','padEnabled','padShape','padSplit','padThickness','padMargin','padClearance','kFactor','padManufacturing'];
-export function geometryRecordKey(params) { const keys=params.hostType==='elbow'?[...PARAM_KEYS,'hostType','bendRadius','bendAngle','bendPosition','surfaceClock','branchSwivel']:PARAM_KEYS;return JSON.stringify(keys.map(k => [k, params[k]])); }
+export function geometryRecordKey(params) { const keys=params.hostType==='elbow'?[...PARAM_KEYS,'hostType','bendRadius','bendAngle','bendPosition','surfaceClock','branchSwivel']:PARAM_KEYS;if(params.hostType==='elbow'){if(params.elbowAlignment&&params.elbowAlignment!=='free')keys.push('elbowAlignment');if(params.motherOpening===false)keys.push('motherOpening');}return JSON.stringify(keys.map(k => [k, params[k]])); }
 export function emptyFabricationPlan() {
   return {version:1,tool:'grinder',stock:null,markError:null,cutError:null,kerf:null,wpsId:'',gapMin:null,gapMax:null,gapBasis:'',bevelAngle:null,rootFace:null,weldNote:'',count:4,tackAngles:[],preGaps:Array(4).fill(null),postGaps:Array(4).fill(null),edgeCondition:'unknown',disposition:'',inspectionKey:''};
 }

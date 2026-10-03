@@ -1,3 +1,4 @@
+import {resolveElbowAlignment} from './elbow-axis.js';
 import { ASME_PIPE_SIZES } from './pipe-sizes.js';
 import { mainAxisSurfaceDatum, jointPositionForSurface } from './field-datums.js';
 import { elbowRadiusKind,elbowEntryDimensions,bendPositionFromBack } from './elbow-input.js';
@@ -25,6 +26,7 @@ export function setupFromParams(params,saved=null) {
   return setup;
 }
 export function positionWithIntent(params,setup) {
+  if(params.hostType==='elbow'&&params.elbowAlignment&&params.elbowAlignment!=='free')return resolveElbowAlignment(params);
   if(params.hostType==='elbow')return {...params,bendPosition:setup.bendPositionMode==='center'?params.bendAngle/2:Number.isFinite(setup.bendBackDistance)?bendPositionFromBack(setup.bendBackDistance,params):params.bendPosition};
   const distance=setup.positionMode==='center'?params.mainLength/2:setup.surfaceDistance;
   return {...params,jointPosition:jointPositionForSurface(params,distance)};

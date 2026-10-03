@@ -1,3 +1,4 @@
+import {resolveElbowAlignment,elbowAlignmentReference} from './elbow-axis.js';
 /** Ideal finite circular elbow + straight branch, millimetres/degrees.
  * No dependency on the existing Site checkout. Torus coordinates are NOT an
  * isometric development of the elbow. Only the straight branch is developed.
@@ -6,7 +7,7 @@ export const DEFAULT_ELBOW_PARAMS=Object.freeze({hostType:'elbow',
   mainOD:200,mainWall:6,mainLength:600,jointPosition:300,
   branchOD:100,branchWall:4,branchLength:200,angle:90,jointType:'on',
   rootGap:0,holeGap:.5,projection:0,offset:0,azimuth:0,
-  bendRadius:304.8,bendAngle:90,bendPosition:45,surfaceClock:0,branchSwivel:0,
+  bendRadius:304.8,bendAngle:90,bendPosition:45,surfaceClock:0,branchSwivel:0,elbowAlignment:'free',motherOpening:true,
   padEnabled:false,tolerance:.1,samples:360,autoPrecision:true});
 export const ELBOW_SAMPLE_CAP=4096;
 const TAU=Math.PI*2,EPS=1e-9,GUARD=1.1;
@@ -109,7 +110,7 @@ export function torusLineIntersections(foot,direction,bendRadius,tubeRadius) {
 }
 
 function validate(raw) {
-  const p={...DEFAULT_ELBOW_PARAMS,...raw},errors=[],error=(field,message)=>errors.push({field,message});
+  const p=resolveElbowAlignment({...DEFAULT_ELBOW_PARAMS,...raw}),errors=[],error=(field,message)=>errors.push({field,message});
   for(const field of ['mainOD','mainWall','branchOD','branchWall','branchLength','angle','rootGap','holeGap','projection',
     'bendRadius','bendAngle','bendPosition','surfaceClock','branchSwivel','tolerance','samples']) {
     p[field]=Number(p[field]);if(!Number.isFinite(p[field]))error(field,'請輸入有限數值。');
@@ -120,7 +121,10 @@ function validate(raw) {
   if(p.bendRadius<=p.mainOD/2+p.rootGap)error('bendRadius','理想環面需彎曲中心半徑大於管外半徑與間隙。');
   if(p.bendAngle<=0||p.bendAngle>180)error('bendAngle','此版支援大於 0° 至 180° 的有限彎頭。');
   if(p.bendPosition<=0||p.bendPosition>=p.bendAngle)error('bendPosition','接頭中心須位於彎頭兩端之間。');
-  if(p.angle<5||p.angle>175)error('angle','支管與當地切線夾角須為 5° 至 175°。');
+  if(p.elbowAlignment==='free'?(p.angle<5||p.angle>175):(p.angle<=0||p.angle>=180))error('angle','支管與當地切線夾角不在有效範圍。');
+  if(!['free','a-axis','b-axis'].includes(p.elbowAlignment))error('elbowAlignment','請選有效的中心線定位方式。');
+  if(typeof p.motherOpening!=='boolean')error('motherOpening','母管開孔設定須為布林值。');
+  if(!p.motherOpening&&(p.jointType!=='on'||p.projection!==0))error('jointType','母管封閉的支撐管只支援外焊貼合，內插須啟用開孔。');
   for(const f of ['rootGap','holeGap','projection'])if(p[f]<0)error(f,'間隙與伸入量不可小於 0。');
   if(!['on','in'].includes(p.jointType))error('jointType','接頭型式須為 on 或 in。');
   if(!Number.isInteger(p.samples)||p.samples<36||p.samples>ELBOW_SAMPLE_CAP)error('samples','取樣段數須為 36 至 4096 的整數。');
@@ -227,19 +231,19 @@ function build(raw) {
   if(errors.length)return fail();
   const model=createModel(p),n=p.samples;
   if(model.normalDotDirection<=1e-5)return fail('branchSwivel','支管必須朝主管外表面法線的外側；此方向近於相切或朝內。');
-  const tool=(p.jointType==='on'?model.ri:model.ro)+p.holeGap;
+  const opening=p.motherOpening,tool=opening?(p.jointType==='on'?model.ri:model.ro)+p.holeGap:null;
   const circle=(radius,minor,cut=false)=>{
     const ring=Array.from({length:n},(_,i)=>cut?model.cut(radius,TAU*i/n):model.near(radius,minor,TAU*i/n));
     ring.push({...ring[0],point:[...ring[0].point]});return ring;
   };
-  let outer,inner,holeOuter,holeInner,endT,maximumDepth,sampledMaxChordError=0,minimumProjectionClearance=Infinity;
+  let outer,inner,holeOuter=[],holeInner=[],contactOuter=[],contactInner=[],endT,maximumDepth,sampledMaxChordError=0,minimumProjectionClearance=Infinity;
   const wallRadii=[model.ri,(3*model.ri+model.ro)/4,(model.ri+model.ro)/2,(model.ri+3*model.ro)/4,model.ro];
   // Probe each branch segment internally too; collision checks must not rely
   // on mesh endpoints (e.g. 37 stations miss the true 90 degree tip limit).
   const wallAngularSamples=Math.min(ELBOW_SAMPLE_CAP,n*8);
   let wallChecks=0,rootResidual=0,roundTripError=0,minNormalDot=1;
   try {
-    if(model.normalExtrados)for(const [radius,minor] of [[model.ro,model.cutMinor],[tool,model.R],[tool,model.Ri]]) {
+    if(model.normalExtrados)for(const [radius,minor] of [[model.ro,model.cutMinor],...(opening?[[tool,model.R],[tool,model.Ri]]:[[model.ro,model.R]])]) {
       // For r<minor, |beta-beta0| is maximized at binormal offset z=0:
       // sin(deltaBeta)=r/(Rc+minor). This encloses all intermediate wall radii,
       // rather than inferring finite-end clearance only from sampled loops.
@@ -248,13 +252,13 @@ function build(raw) {
       if(model.beta-delta<0||model.beta+delta>model.bend)throw new Error('支管切口或主管開孔跨出有限彎頭端部。');
     }
     outer=circle(model.ro,model.cutMinor,true);inner=circle(model.ri,model.cutMinor,true);
-    holeOuter=circle(tool,model.R);holeInner=circle(tool,model.Ri);
+    if(opening){holeOuter=circle(tool,model.R);holeInner=circle(tool,model.Ri);}else{contactOuter=circle(model.ro,model.R);contactInner=circle(model.ri,model.R);}
     const maxT=Math.max(extremum(t=>model.cut(model.ro,t).t,outer.map(q=>q.t),true),
       extremum(t=>model.cut(model.ri,t).t,inner.map(q=>q.t),true));
     endT=maxT+p.branchLength;
     maximumDepth=endT-extremum(t=>model.cut(model.ro,t).t,outer.map(q=>q.t),false);
     const series=[[model.ro,model.cutMinor,true,outer],[model.ri,model.cutMinor,true,inner],
-      [tool,model.R,false,holeOuter],[tool,model.Ri,false,holeInner]];
+      ...(opening?[[tool,model.R,false,holeOuter],[tool,model.Ri,false,holeInner]]:[[model.ro,model.R,false,contactOuter],[model.ri,model.R,false,contactInner]])];
     for(const [radius,minor,isCut,ring] of series)for(let i=0;i<n;i++) {
       const a=ring[i],b=ring[i+1];
       if(distance(a.point,b.point)>Math.max(20,TAU*radius/n*15/Math.max(.1,model.normalDotDirection)))
@@ -273,7 +277,7 @@ function build(raw) {
     // Physical collision is checked only over the retained finite branch.
     // Remote full-torus roots outside the real elbow's arc never count.
     const checkWall=(radius,theta)=>{
-      const f=model.foot(radius,theta),nearOuter=model.near(radius,model.R,theta),nearInner=model.near(radius,model.Ri,theta);
+      const f=model.foot(radius,theta),nearOuter=model.near(radius,model.R,theta),nearInner=p.jointType==='in'?model.near(radius,model.Ri,theta):null;
       const cut=model.cut(radius,theta),caps=model.endPlanes(f);
       // Normal extrados: after the near cut, u=Rc+R+t grows, and
       // hypot(hypot(u,w)-Rc,z) is monotone. beta converges toward beta0.
@@ -354,7 +358,9 @@ function build(raw) {
     notes:['主管為有限理想圓形彎頭；此圖只展開直支管外壁。',
       '0° 為 −當地切線在支管橫截面的投影；由自由端朝接頭看，站角順時針增加。',
       '未包含坡口、刀縫、焊接收縮、彎頭橢圓度或實測形變。',
-      '彎頭壁厚方向交線未具全域凸性；此版不提供粗切留料包絡。'],
+      '彎頭壁厚方向交線未具全域凸性；此版不提供粗切留料包絡。',
+      ...(opening?[]:['外焊支撐：母管保持封閉，貼合定位輪廓不得當母管開孔切線。']),
+      ...(p.elbowAlignment==='free'?[]:[`${p.elbowAlignment==='b-axis'?'B':'A'} 端中心線與支管軸線重合，延伸方向由同軸條件計算。`])],
     mapping:{coordinateSystem:'branch-outer-wrap',circumference:C,axisEnd:endT,origin:[0,0],hostType:'elbow'}};
   const locator=(q,minor)=>({betaDegrees:q.beta*180/Math.PI,phiDegrees:unwrap(q.phi,model.phi)*180/Math.PI,
     centerlineDistance:model.Rc*q.beta,backSpineDistance:(model.Rc+minor)*q.beta,
@@ -362,6 +368,7 @@ function build(raw) {
   const geometry={branch:{outerCut,innerCut,outerEnd:endRing(model.ro),innerEnd:endRing(model.ri),
     outerRadius:model.ro,innerRadius:model.ri,axisEnd:endT},
     elbow:{bendRadius:model.Rc,bendAngle:rad(p.bendAngle),bendPosition:rad(p.bendPosition),surfaceClock:rad(p.surfaceClock),
+      motherOpening:opening,outerContact3D:contactOuter.map(q=>q.point),innerContact3D:contactInner.map(q=>q.point),
       outerRadius:model.R,innerRadius:model.Ri,outerHole3D:holeOuter.map(q=>q.point),innerHole3D:holeInner.map(q=>q.point),
       outerHoleUV:holeOuter.map(q=>q.uv),innerHoleUV:holeInner.map(q=>q.uv),
       outerHoleLocator:holeOuter.map(q=>locator(q,model.R)),innerHoleLocator:holeInner.map(q=>locator(q,model.Ri)),
@@ -373,19 +380,24 @@ function build(raw) {
       hostTangent:model.frame.tangent,hostNormal:model.m}};
   const closure=Math.max(distance(outerCut[0],outerCut.at(-1)),distance(innerCut[0],innerCut.at(-1)));
   const chord=sampledMaxChordError*GUARD;
+  const reference=elbowAlignmentReference(p);
+  if(reference)geometry.axes.reference=reference;
   const verification=[{id:'equations',label:'理想環面方程距離殘差',value:rootResidual,unit:'mm',tolerance:p.tolerance,status:rootResidual<=p.tolerance?'pass':'fail'},
     {id:'roundtrip',label:'環面角度參數回算誤差（非等距展開）',value:roundTripError,unit:'mm',tolerance:p.tolerance,status:roundTripError<=p.tolerance?'pass':'fail'},
     {id:'closure',label:'近側交線閉合誤差',value:closure,unit:'mm',tolerance:p.tolerance,status:closure<=p.tolerance?'pass':'fail'},
     {id:'chord',label:'採樣弦差（含數值餘量）',value:chord,unit:'mm',tolerance:p.tolerance,status:chord<=p.tolerance?'pass':'warning'},
     {id:'wall-collision',label:model.normalExtrados?'外背法線管身解析排除干涉／伸入探查':'有限管身壁厚探查',
       value:wallChecks,unit:'samples',tolerance:0,status:'pass',basis:model.normalExtrados?'analytic-extrados-radial-monotonicity':'finite-probes'}];
+  if(reference){const v=sub(model.origin,reference.center),along=dot(v,reference.direction),axisDistance=norm(sub(v,mul(reference.direction,along))),axisAngle=Math.atan2(norm(cross(model.d,reference.direction)),dot(model.d,reference.direction))*180/Math.PI;
+    verification.push({id:'axis-distance',label:`支管與 ${reference.end} 端中心線同軸距離`,value:axisDistance,unit:'mm',tolerance:p.tolerance,status:axisDistance<=p.tolerance?'pass':'fail'},{id:'axis-direction',label:`支管與 ${reference.end} 端延伸方向偏差`,value:axisAngle,unit:'°',tolerance:1e-7,status:axisAngle<=1e-7?'pass':'fail'});
+  }
   warnings.push(model.normalExtrados?
     '彎頭採理想環面；外背法線管身以單調距離排除再入壁，伸入餘裕仍用有限壁厚站探查；現場成形偏差與全壁厚粗切包絡未納入。':
     '彎頭採理想環面；現場成形偏差與全壁厚干涉僅有限採樣檢查，未構成嚴格全域包絡證明。');
   if(p.offset||p.azimuth||p.jointPosition!==DEFAULT_ELBOW_PARAMS.jointPosition)warnings.push('彎頭使用彎曲位置／截面方位／支管旋向；直管偏心、方位與 J 參數未套用。');
   const measurements={mainCircumference:TAU*model.R,branchCircumference:C,branchMinLength:p.branchLength,
     branchMaxLength:maximumDepth,branchAxisEnd:endT,branchOuterCutLength:perimeter(outerCut),branchInnerCutLength:perimeter(innerCut),
-    mainHoleToolDiameter:2*tool,mainHoleAxialLength:null,mainHoleArcWidth:null,padMinimumMargin:null,padNetArea:0,padNeutralRadius:null,
+    mainHoleToolDiameter:opening?2*tool:null,mainHoleAxialLength:null,mainHoleArcWidth:null,padMinimumMargin:null,padNetArea:0,padNeutralRadius:null,
     projectionAvailable:minimumProjectionClearance<Infinity?minimumProjectionClearance:null,
     projectedLength:model.projection,normalDotDirection:model.normalDotDirection,minIntersectionNormalDot:minNormalDot,
     elbowCenterlineLength:model.Rc*model.bend,elbowBackSpineLength:(model.Rc+model.R)*model.bend};
@@ -395,7 +407,7 @@ function build(raw) {
       'radial-wall-stations-interior-angular-probes-and-polished-insertion-limits',radii:wallRadii,
       angularSamples:model.normalExtrados&&p.jointType==='on'?0:wallAngularSamples,checks:wallChecks,
       retainedBodyMethod:model.normalExtrados?'analytic-extrados-radial-monotonicity':'finite-probes',
-      rigorous:false,roughCutSupported:false},capabilities:{roughCut:false,pad:false,wholeHostDevelopment:false}};
+      rigorous:false,roughCutSupported:false},capabilities:{motherOpening:opening,roughCut:false,pad:false,wholeHostDevelopment:false}};
 }
 
 export function computeElbowJoint(raw={}) {
@@ -435,6 +447,7 @@ export function computeExactElbowHoleTable(input,count=24) {
   if(!Number.isInteger(count)||count<1||count>ELBOW_SAMPLE_CAP)throw new RangeError('母孔分點區段须为 1 至 4096 的整數。');
   const joint=input?.params&&typeof input.valid==='boolean'?input:computeElbowJoint({...input,samples:72,autoPrecision:false,padEnabled:false});
   if(!joint.valid||!joint.geometry)throw new RangeError('無效彎頭接頭無法產生母孔分點表。');
+  if(joint.params.motherOpening===false)throw new RangeError('母管保持封閉，沒有開孔分點；請使用貼合定位表。');
   const model=createModel(joint.params),tool=(joint.params.jointType==='on'?model.ri:model.ro)+joint.params.holeGap;
   const rowCoordinates=(root,radius)=>{
     const phiRad=wrap(root.phi),betaRad=root.beta;
@@ -449,4 +462,15 @@ export function computeExactElbowHoleTable(input,count=24) {
     return {station:i,angle:360*i/count,...rowCoordinates(outer,model.R),
       innerPoint:inner.point,inner:rowCoordinates(inner,model.Ri)};
   });
+}
+
+
+/** Marking footprint for a closed mother, or actual outer-hole stations. */
+export function computeExactElbowLocatorTable(input,count=24){
+  const joint=input?.params&&typeof input.valid==='boolean'?input:computeElbowJoint(input);
+  if(joint.params.motherOpening!==false)return computeExactElbowHoleTable(joint,count);
+  if(!Number.isInteger(count)||count<1||count>ELBOW_SAMPLE_CAP)throw new RangeError('貼合分點區段須為 1 至 4096 的整數。');
+  if(!joint.valid||!joint.geometry)throw new RangeError('無效彎頭接頭無法產生貼合分點表。');
+  const model=createModel(joint.params),coordinates=root=>{const phiRad=wrap(root.phi),betaRad=root.beta;return {point:root.point,betaRad,betaDegrees:betaRad*180/Math.PI,phiRad,phiDegrees:phiRad*180/Math.PI,rearDistance:(model.Rc+model.R)*betaRad,bellyDistance:(model.Rc-model.R)*betaRad,circumference:model.R*phiRad};};
+  return Array.from({length:count+1},(_,i)=>{const theta=i===count?0:TAU*i/count,outer=model.near(model.ro,model.R,theta),inner=model.near(model.ri,model.R,theta);return {station:i,angle:360*i/count,basis:'attachment-outer-footprint-not-cut',...coordinates(outer),innerPoint:inner.point,inner:coordinates(inner)};});
 }

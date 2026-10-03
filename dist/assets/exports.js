@@ -8,7 +8,7 @@ export const PROJECT_FORMAT = 'pipe-fabrication-project';
 export const PROJECT_VERSION = 1;
 
 const PARAM_RULES = Object.freeze({
-  hostType:['straight','elbow'],bendRadius:'positive',bendAngle:'bendAngle',bendPosition:'number',surfaceClock:'number',branchSwivel:'number',
+  hostType:['straight','elbow'],elbowAlignment:['free','a-axis','b-axis'],motherOpening:'boolean',bendRadius:'positive',bendAngle:'bendAngle',bendPosition:'number',surfaceClock:'number',branchSwivel:'number',
   mainOD: 'positive', mainWall: 'positive', mainLength: 'positive', jointPosition: 'number',
   branchOD: 'positive', branchWall: 'positive', branchLength: 'positive', angle: 'angle',
   azimuth: 'number', offset: 'number', jointType: ['on', 'in'], projection: 'nonnegative',
