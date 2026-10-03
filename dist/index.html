@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="description" content="配管接頭、fishmouth、主管開孔及補強板的3D幾何與現場放樣工作台。">
+  <title>配管放樣工作台</title>
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%2313253d'/%3E%3Cpath d='M5 24h22M15 24L25 6' stroke='%237bd6ff' stroke-width='6'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="assets/styles.css">
+  <link rel="stylesheet" href="assets/extra.css">
+  <script type="importmap">{"imports":{"three":"./assets/vendor/three.module.js","three/addons/controls/OrbitControls.js":"./assets/vendor/OrbitControls.js"}}</script>
+</head>
+<body>
+  <header class="app-header">
+    <div class="brand-mark" aria-hidden="true">P</div>
+    <div class="brand"><h1>配管放樣工作台</h1><p>接頭幾何 · 裁切樣板 · 補強板</p></div>
+    <div class="header-actions">
+      <button type="button" id="save-project" class="button">儲存專案</button>
+      <button type="button" id="load-project" class="button">載入專案</button>
+      <input type="file" id="project-file" accept=".json,application/json" hidden>
+      <button type="button" id="report-button" class="button primary">製作報告</button>
+    </div>
+  </header>
+  <main class="workspace">
+    <aside class="parameter-panel" aria-label="接頭設計參數">
+      <div class="panel-header"><h2>接頭設定</h2><span class="unit-tag">尺寸 mm</span></div>
+      <div class="input-row"><label for="joint-id">接頭編號</label><input id="joint-id" value="J-001" maxlength="40"></div>
+      <div class="mode-switch" aria-label="操作模式"><button type="button" data-mode="guided" aria-pressed="true">分步引導</button><button type="button" data-mode="expert" aria-pressed="false">集中調整</button></div>
+      <nav id="steps" class="step-list" aria-label="設計步驟"></nav>
+      <form id="parameter-form" novalidate></form>
+      <div class="step-actions"><button type="button" id="previous-step" class="button">上一步</button><button type="button" id="next-step" class="button primary">下一步</button></div>
+      <div id="form-errors" class="form-errors" role="alert" hidden></div>
+      <div class="scope-note"><strong>幾何與放樣工具</strong><p>承壓補強、焊接強度與設計核准需另行驗證。輸出會附上計算基準與加工限制。</p></div>
+    </aside>
+    <div class="working-area">
+      <section class="model-panel" aria-label="3D 接頭預覽">
+        <div class="model-heading"><div><span class="eyebrow">JOINT MODEL</span><h2 id="model-title">外貼式接頭</h2></div><span id="geometry-status" class="status">幾何計算</span></div>
+        <div id="viewer" class="viewer"><svg id="bootstrap-model" viewBox="0 0 700 360" role="img" aria-label="主管、支管與補強板接合示意"><g fill="none" stroke-width="2"><path d="M115 225L500 320M142 95L527 190" stroke="#73869f"/><ellipse cx="128" cy="160" rx="36" ry="68" transform="rotate(15 128 160)" stroke="#73869f"/><ellipse cx="514" cy="255" rx="36" ry="68" transform="rotate(15 514 255)" stroke="#73869f"/><path d="M306 171L425 48M383 197L496 89" stroke="#7bd6ff"/><ellipse cx="460" cy="69" rx="42" ry="23" transform="rotate(30 460 69)" stroke="#7bd6ff"/><ellipse cx="344" cy="185" rx="46" ry="20" transform="rotate(15 344 185)" stroke="#7bd6ff"/><path d="M279 152Q276 148 285 148L423 182Q432 188 422 198L404 216Q396 223 384 220L254 188Q245 184 257 174Z" stroke="#e4ad63"/></g></svg><div class="viewer-hint">拖曳旋轉 · 滾輪縮放 · 右鍵平移</div></div>
+        <div class="viewer-toolbar"><div class="toolbar-group"><button type="button" class="button" id="explode-view" aria-pressed="false">拆開零件</button><button type="button" class="button" id="transparent-view" aria-pressed="false">透明檢視</button><button type="button" class="button" id="section-view" aria-pressed="false">剖面</button></div><div class="toolbar-group"><button type="button" class="button" data-camera="front">正視</button><button type="button" class="button" data-camera="side">側視</button><button type="button" class="button" data-camera="iso">立體</button><button type="button" class="button" id="fit-view">置中</button></div></div>
+        <div class="part-legend"><label><input type="checkbox" data-layer="main" checked><span class="swatch main"></span>A 主管</label><label><input type="checkbox" data-layer="branch" checked><span class="swatch branch"></span>B 支管</label><label><input type="checkbox" data-layer="pad" checked><span class="swatch pad"></span>C 補強板</label><span id="model-summary"></span></div>
+      </section>
+      <section class="drawing-panel" aria-label="展開與現場尺寸">
+        <div class="drawing-heading"><h2>現場放樣</h2><div class="toolbar-group"><button type="button" class="button" id="svg-export">SVG</button><button type="button" class="button" id="dxf-export">DXF</button></div></div>
+        <div id="part-tabs" class="part-tabs" role="tablist" aria-label="選擇零件圖面"></div>
+        <div class="pattern-meta"><strong id="pattern-title">B 支管 fishmouth</strong><span id="pattern-size"></span></div>
+        <svg id="pattern" class="pattern" role="img" aria-label="選定零件的真實尺寸展開圖"></svg>
+        <div id="pattern-note" class="pattern-note"></div>
+        <div class="legend-row"><span><i class="line-swatch"></i>裁切輪廓</span><span><i class="line-swatch dashed"></i>基準／對位</span><span>畫面自動縮放；匯出保留 mm</span></div>
+      </section>
+      <section class="results-panel" aria-label="幾何驗證與尺寸表">
+        <div class="result-tabs" role="tablist" aria-label="計算結果"><button type="button" id="validation-tab" role="tab" aria-selected="true" aria-controls="validation-panel">幾何驗證</button><button type="button" id="stations-tab" role="tab" aria-selected="false" aria-controls="stations-panel">圓周分點尺寸</button><button type="button" id="instructions-tab" role="tab" aria-selected="false" aria-controls="instructions-panel">操作與製作基準</button></div>
+        <div id="validation-panel" role="tabpanel" aria-labelledby="validation-tab"><div id="validation-summary" class="verification-summary"></div><div class="table-scroll"><table><thead><tr><th>檢查項目</th><th>結果</th><th>允許值</th><th>狀態</th></tr></thead><tbody id="verification-rows"></tbody></table></div><div id="warnings" class="warnings"></div></div>
+        <div id="stations-panel" role="tabpanel" aria-labelledby="stations-tab" hidden><div class="station-controls"><label for="station-count">分點數</label><select id="station-count"><option value="12">12 點</option><option value="24" selected>24 點</option><option value="36">36 點</option><option value="72">72 點</option></select><button type="button" class="button" id="csv-export">下載尺寸表 CSV</button></div><div class="table-scroll"><table><thead><tr><th>角度 °</th><th>沿管周 mm</th><th>直端至外切口 mm</th><th>直端至內切口 mm</th></tr></thead><tbody id="station-rows"></tbody></table></div></div>
+        <div id="instructions-panel" role="tabpanel" aria-labelledby="instructions-tab" hidden><div class="instruction-content"><p><strong>外貼：</strong>支管切口依主管外壁及設定間隙計算。主管孔採支管內徑与每側孔口放大量；此版採這個開孔基準，實際接頭細節需核對。</p><p><strong>內插：</strong>主管孔容納支管外徑與每側孔口間隙。管端依主管內壁計算，再沿支管軸向內延伸指定深度。</p><p><strong>方向：</strong>主管軸為 X；0° 朝管頂，90° 朝 +Y。主管樣板起縫在接頭相反側，支管 0° 基準為 3D 支管上的虛線。</p><p><strong>補強板：</strong>外形定義在中性展開面，K 值需依捲製流程校正。最低留邊只指中性面，上下孔緣另外檢查是否切穿外緣。</p><p><strong>裁切：</strong>實線為成品輪廓，灰／藍區為保留材料。虛線內緣供壁厚修磨參考，尚未套用坡口、刀縫、粗切留料或焊接收縮。報告為幾何放樣資料，承壓補強與焊接設計須另行核准。</p><p><strong>列印：</strong>選實際尺寸／100%，關閉符合頁面與瀏覽器頁首頁尾；先量雙方向 100 mm 校正尺再放樣。主管包覆样板涵蓋整段主管，頁數較多時可選 A3 或只勾需要的零件。</p><details><summary>計算與驗證方法</summary><p>主管圓柱：<code>y² + z² = R²</code>。支管圓周各點沿軸線 <code>q + s·d</code> 與主管內／外圓柱求交，保留靠近接頭的一側。偏心與方位旋轉使用同一座標系。</p><p>獨立核對使用通用二次方程 <code>A·s² + B·s + C = 0</code>，其中 <code>A=dᵧ²+d𝓏²</code>、<code>B=2(qᵧdᵧ+q𝓏d𝓏)</code>、<code>C=qᵧ²+q𝓏²−R²</code>。表中列出兩種求交方式的最大差值。</p><p>圓柱展開使用 <code>u=R·φ</code>，再回包至 3D 核對座標。取樣弦差為每段中點與解析曲線的距離，包含補強板外緣；無效交線、端部越界、對側內壁干涉與板孔切穿外緣會停止製作出圖。</p></details></div></div>
+      </section>
+      <footer class="workspace-footer"><span id="revision-status">接頭 J-001</span><span>幾何資料與所有零件圖面同步</span></footer>
+    </div>
+  </main>
+  <dialog id="report-dialog"><form method="dialog" class="dialog-head"><h2>製作現場報告</h2><button class="button" value="cancel" aria-label="關閉報告設定">關閉</button></form><div class="dialog-body"><label for="report-paper">紙張</label><select id="report-paper"><option>A4</option><option>A3</option></select><label for="report-orientation">方向</label><select id="report-orientation"><option value="portrait">直式</option><option value="landscape">橫式</option></select><fieldset id="report-parts"><legend>包含零件</legend></fieldset><div id="report-pages" class="report-pages"></div><p>含參數、幾何驗證、分點尺寸與各零件的 1:1 拼接樣板。請使用實際尺寸列印並核對校正尺。</p><div class="dialog-actions"><button type="button" id="download-report" class="button">下載可列印報告</button><button type="button" id="print-report" class="button primary">開啟列印／PDF</button></div></div></dialog>
+  <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+  <script type="module" src="assets/app.js"></script>
+</body>
+</html>
