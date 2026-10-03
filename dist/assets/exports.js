@@ -3,12 +3,13 @@
  */
 import { validateFabricationPlan, reconcileFitRecords, machiningBudget, fitPointStatus, fitPhaseStatus, createRoughCutTemplate } from './fabrication-plan.js';
 import { computeExactElbowStationTable } from './elbow-geometry.js';
+import { computeExactConicalStationTable,computeExactConicalLocatorTable,conicalDevelopmentToWorld } from './conical-geometry.js';
 import { buildElbowWorkOrderHTML,elbowWorkOrderPageRoles } from './elbow-field.js';
 export const PROJECT_FORMAT = 'pipe-fabrication-project';
 export const PROJECT_VERSION = 1;
 
 const PARAM_RULES = Object.freeze({
-  hostType:['straight','elbow'],elbowAlignment:['free','a-axis','b-axis'],motherOpening:'boolean',bendRadius:'positive',bendAngle:'bendAngle',bendPosition:'number',surfaceClock:'number',branchSwivel:'number',
+  hostType:['straight','elbow','cone'],mainEndOD:'positive',elbowAlignment:['free','a-axis','b-axis'],motherOpening:'boolean',bendRadius:'positive',bendAngle:'bendAngle',bendPosition:'number',surfaceClock:'number',branchSwivel:'number',
   mainOD: 'positive', mainWall: 'positive', mainLength: 'positive', jointPosition: 'number',
   branchOD: 'positive', branchWall: 'positive', branchLength: 'positive', angle: 'angle',
   azimuth: 'number', offset: 'number', jointType: ['on', 'in'], projection: 'nonnegative',
@@ -20,6 +21,7 @@ const PARAM_RULES = Object.freeze({
 });
 const META_KEYS = new Set(['id', 'title', 'name', 'project', 'projectName', 'preparedBy', 'company', 'revision', 'createdAt', 'updatedAt', 'notes']);
 const LABELS = Object.freeze({
+
   mainOD: ['主管實際外徑', 'mm'], mainWall: ['主管壁厚', 'mm'], mainLength: ['主管長度', 'mm'],
   jointPosition: ['主管中心面軸基準 X（虛擬）', 'mm'], branchOD: ['支管實際外徑', 'mm'], branchWall: ['支管壁厚', 'mm'],
   branchLength: ['支管最短軸向長度', 'mm'], angle: ['主管與支管軸線夾角', '°'], azimuth: ['支管方位角', '°'],
@@ -367,6 +369,7 @@ function clipPolylineToRectangle(points, bounds) {
  * No crop may truncate a hole. This is a paper boundary, not a metal outer cut.
  */
 export function createMainOpeningPatch(result, options = {}) {
+  if(result?.params?.hostType==='cone')return createConicalOpeningPatch(result,options);
   if(result?.params?.hostType==='elbow')throw new Error('彎頭母孔使用分點定位工單，不能產生整片 1:1 包覆紙樣。');
   if (!plainObject(result) || result.valid !== true) throw new Error('請先產生有效的主管開孔模型。');
   const source = result.templates?.find(t => t.id === 'main');
@@ -417,6 +420,24 @@ export function createMainOpeningPatch(result, options = {}) {
       positioning: { A: { arc: circumferentialOrigin + a[0], axial: axialOrigin + a[1] }, B: { arc: circumferentialOrigin + c[0], axial: axialOrigin + c[1] } } } };
 }
 
+/** A rectangle is only the PAPER crop. Its hole remains the exact conical
+ * isometric development; axes are never swapped into cylindrical X/U. */
+export function createConicalOpeningPatch(result,options={}){
+  assertValidResult(result);if(result.params.hostType!=='cone')throw new Error('此紙樣僅適用同心直錐台母材。');
+  const source=result.templates.find(t=>t.id==='main'||t.id==='main-conical');if(!source)throw new Error('缺少大小頭外壁扇環紙樣。');
+  const t=cleanTemplate(source),opening=result.params.motherOpening!==false,footprint=opening?t.holes[0]:t.references.find(r=>r.closed&&r.type==='datum')?.points;
+  if(!footprint?.length)throw new Error('缺少完整孔口或貼合足跡。');const margin=options.margin??25;finite(margin,'局部紙樣留邊');if(margin<5||margin>500)throw new Error('局部紙樣留邊須為 5 至 500 mm。');
+  const all=[...footprint,...t.references.filter(r=>r.type==='inner-edge').flatMap(r=>r.points)],minX=Math.min(...all.map(q=>q[0]))-margin,maxX=Math.max(...all.map(q=>q[0]))+margin,minY=Math.min(...all.map(q=>q[1]))-margin,maxY=Math.max(...all.map(q=>q[1]))+margin,b={minX,maxX,minY,maxY},move=q=>[q[0]-minX,q[1]-minY],width=maxX-minX,height=maxY-minY,base=t.mapping.origin??[0,0],origin=[base[0]+minX,base[1]+minY];
+  const references=t.references.flatMap(r=>clipPolylineToRectangle(r.points,b).map((points,i)=>({...r,points:points.map(move),label:i?'':r.label,closed:false,labelPosition:null}))),positioning={};
+  for(const [name,index]of[['A',0],['B',Math.floor((footprint.length-1)/4)]]){
+    const q=footprint[index],paper=move(q),world=conicalDevelopmentToWorld([q[0]+base[0],q[1]+base[1]],result.params,0,t.mapping.seamAngle),phi=((Math.atan2(world[1],world[2])%(Math.PI*2))+Math.PI*2)%(Math.PI*2),R=Math.hypot(world[1],world[2]),slant=world[0]*result.geometry.conical.s;
+    positioning[name]={paper,x:world[0],slant,phiDegrees:phi*180/Math.PI,arc:R*phi};
+    references.push({points:[[paper[0]-2,paper[1]],[paper[0]+2,paper[1]]],type:'datum',label:`${name}：S ${fmt(slant,2)} / φ ${fmt(phi*180/Math.PI,2)}°`,labelPosition:[Math.min(width-2,Math.max(2,paper[0])),Math.max(3,paper[1]-4)],textAnchor:paper[0]>width/2?'end':'start'},{points:[[paper[0],paper[1]-2],[paper[0],paper[1]+2]],type:'datum',label:''});
+  }
+  return {...source,id:'main-local',title:opening?'大小頭開孔局部包覆紙樣':'大小頭外焊貼合局部定位紙樣',basis:'已成形大小頭外壁等距包覆（不是鋼板落料）',outerRole:'paper-boundary',width,height,outer:[[0,0],[width,0],[width,height],[0,height],[0,0]],holes:opening?t.holes.map(h=>[...h.map(move),move(h[0])]):[],references,
+    notes:[...source.notes,'矩形框只裁紙，孔口／貼合曲線保留真實扇環展開，不套用直管周長矩形公式。','A/B 十字沿母材 A 端方位 0° 母線量 S，再在同一截面轉至 φ；本圖十字不是鑽孔。'],mapping:{...t.mapping,motherOpening:opening,localConicalWrap:true,sourceTemplate:'main',origin,positioning}};
+}
+
 function branchSource(template) {
   const m = template.mapping ?? {};
   const c = finite(m.circumference, '支管外徑周長');
@@ -431,6 +452,10 @@ function branchSource(template) {
   return { c, outer: uniqueOuter, inner: copy(inner), mapping: m };
 }
 function branchExactStation(result, angle, source) {
+  if(result?.params?.hostType==='cone'){
+    const stations=computeExactConicalStationTable(result,source.mapping.stationCount??24),exact=stations.find(s=>Math.abs(s.angle-angle)<1e-8);
+    if(!exact)throw new Error('大小頭紙樣角度須由精確分點計算取得。');return exact;
+  }
   if(result?.params?.hostType==='elbow') {
     const count=source.mapping.stationCount??24;
     const stations=computeExactElbowStationTable(result,count);
@@ -478,7 +503,7 @@ function branchPaper(template, result, options, local) {
   const tickY = local ? datumY : Math.min(14, height / 3);
   const labelCount = [stationCount, 12, 4, 2].find(count => c / count >= 8) ?? 2;
   const labelStride = stationCount / labelCount;
-  const stationRows = [],elbowStations=result?.params?.hostType==='elbow'?computeExactElbowStationTable(result,stationCount):null;
+  const stationRows = [],elbowStations=result?.params?.hostType==='elbow'?computeExactElbowStationTable(result,stationCount):result?.params?.hostType==='cone'?computeExactConicalStationTable(result,stationCount):null;
   for (let i = 0; i <= stationCount; i++) {
     const angle = i * 360 / stationCount, x = c - c * i / stationCount;
     if (result?.params) stationRows.push(elbowStations?elbowStations[i]:branchExactStation(result, angle, source));
@@ -495,7 +520,7 @@ function branchPaper(template, result, options, local) {
     '文字面朝外包覆：0° 在紙樣右側，360° 在左側；兩側是同一母線。由自由直端看向接頭，角度正向為順時針，紙上角度往左增加。',
     `支管實際外徑周長 ${fmt(c, 6)} mm；右側 ${fmt(tab)} mm 斜線區只作貼合舌，覆在左側 0–${fmt(tab)} mm 紙區。細點矩形只裁紙，粗實線 CUT_FISHMOUTH 才切管材，內緣虛線只供壁厚修磨。`,
     ...(local ? [`先由自由直端面沿管軸量 ${fmt(originalDepthOrigin, 6)} mm 畫定位環線，對準紙樣定位環線；紙樣只截取口部，並未把切口重新當成深度零。${top < 0 ? `紙樣上緣需凸出直端 ${fmt(-top, 6)} mm，可修掉空白，但不可移動定位環線。` : `紙樣上緣距自由直端 ${fmt(top, 6)} mm。`}`] : [top < 0 ? `紙樣深度 0 定位線對準自由直端面，紙緣凸出直端 ${fmt(-top, 6)} mm；所有內外緣共用原直端基準。` : '紙樣上緣對準自由直端面；所有外緣、內緣深度共用這個直端基準。']),
-    ...(result?.params?.hostType==='elbow'?['彎頭支管 0° 母線朝 −當地切線的截面投影，即朝 A 端方向；從自由端朝接頭看，站角順時針增加。',...template.notes??[]]:['0° 母線位於通過支管軸線且平行主管軸線的平面，徑向朝主管基準端的一側；有偏心時兩條實際軸線未必共面。']),
+    ...(result?.params?.hostType==='elbow'?['彎頭支管 0° 母線朝 −當地切線的截面投影，即朝 A 端方向；從自由端朝接頭看，站角順時針增加。',...template.notes??[]]:result?.params?.hostType==='cone'?['大小頭支管 0° 朝 −當地母線的截面投影，即朝 A 端方向；從自由端朝接頭看，站角順時針增加。',...template.notes??[]]:['0° 母線位於通過支管軸線且平行主管軸線的平面，徑向朝主管基準端的一側；有偏心時兩條實際軸線未必共面。']),
   ];
   return { ...template, id: local ? 'branch-local' : 'branch', title: local ? '支管口部短包覆紙樣' : '支管整長包覆紙樣',
     basis: '支管實際外徑，文字面朝外（深度由自由直端量）', width, height, outerRole: 'paper-boundary',
@@ -632,6 +657,10 @@ function processNoteSheets(plan,paper){
 /** Exposed for the UI: the exact same plan is used by the report renderer. */
 export function reportPagePlan(result, options = {}) {
   assertValidResult(result);
+  if(result.params.hostType==='cone'){
+    const pages=conicalWorkOrderPages(result,options.metadata??{}, {...options,includeValidation:true}),rows=computeExactConicalStationTable(result,12);
+    return {totalPages:pages.length,coverPages:1,notePages:pages.length-2,fabricationPages:0,stationPages:1,stationRowCount:rows.length,stationSheets:[{rows}],parts:[]};
+  }
   if(result.params.hostType==='elbow') {
     if(options.parts?.some(id=>!['branch','branch-local'].includes(id)))throw new Error('彎頭報告僅支援支管與開孔定位資料；沒有母管包覆或粗切樣板。');
     const rows=computeExactElbowStationTable(result,options.stationCount??12),roles=elbowWorkOrderPageRoles(result,{...options,branchCount:options.stationCount??12,includeValidation:true}),count=role=>roles.filter(value=>value===role).length;
@@ -703,6 +732,7 @@ function statusText(status) {
     error: '錯誤', 'not-assessed': '未評估', info: '資訊', unverified: '未驗證' })[status] ?? String(status ?? '未評估');
 }
 function templateAxes(template) {
+  if(template.mapping?.hostType==='cone'&&template.id.startsWith('main'))return '錐面扇環等距紙樣；A/B 十字按母線距離與截面方位定位';
   if (template.id === 'main' || template.id === 'main-local' || template.mapping?.coordinateSystem === 'main-outer-wrap' || template.mapping?.coordinateSystem === 'main-outer-local-wrap')
     return 'U→周向逆時針；X↓離基準端';
   if (template.mapping?.paperTransform === 'branch-mirror-x') return `θ←順時針（自由端看接頭）；深度↓${template.mapping.localCuttingWrap ? `定位環距直端 ${fmt(template.mapping.originalDepthOrigin)} mm` : '由自由直端量'}`;
@@ -711,6 +741,7 @@ function templateAxes(template) {
   return 'X→主管軸向；U↓主管周向';
 }
 function templateLegend(t) {
+  if(t.mapping?.hostType==='cone'&&t.id.startsWith('main')&&t.mapping?.motherOpening===false)return '母材封閉；虛線＝貼合定位；細點框只裁紙；禁止依輪廓開孔';
   if (t.id==='branch-rough') return '粗實線＝成品外緣；長虛線 ROUGH_CUT＝粗切留料線；短虛線＝內緣；細點框只裁紙；T＝點固參考母線';
   if (t.mapping?.paperTransform === 'branch-mirror-x') return '粗實線＝魚口金屬切線；細點框只裁紙；斜線區＝貼合舌；內緣虛線供修磨';
   if (t.id === 'main' || t.id === 'main-local') return '孔口實線＝金屬切線；細點框只裁紙；×＝孔口切除；十字只作定位';
@@ -729,7 +760,7 @@ function padManufacturingText(params) {
   return '平板彎製：依主管外半徑＋K×板厚的中性層展開供板材下料。K 須依材料與設備校正，成形後核對孔口內外緣並依工法修孔。此圖不可當成已彎板外表面的包覆樣板。';
 }
 function thresholdSymbol(verification) {
-  return ['pad-margin', 'pad-inner-fit', 'pad-outer-fit'].includes(verification.id) ? '≥' : '≤';
+  return ['pad-margin', 'pad-inner-fit', 'pad-outer-fit','formed-pad-whole-thickness-margin','formed-pad-free-end'].includes(verification.id) ? '≥' : '≤';
 }
 function stationDigits(tolerance) {
   return Math.max(3, Math.min(8, Number.isFinite(tolerance) && tolerance > 0 ? Math.ceil(-Math.log10(tolerance)) + 1 : 3));
@@ -774,6 +805,7 @@ ${horizontalRuler(4, tileH + 3)}${verticalRuler(tileW + 3, 4)}
  * assemblySVG is accepted only as caller-generated trusted markup; never use imported text.
  */
 export function buildReportHTML(result, meta = {}, options = {}) {
+  if(result.params?.hostType==='cone')return buildConicalWorkOrderHTML(result,meta,{...options,includeValidation:true});
   if(result.params?.hostType==='elbow'){reportPagePlan(result,{...options,metadata:meta});return buildElbowWorkOrderHTML(result,meta,{...options,branchCount:options.stationCount??12,includeValidation:true});}
   const plan = reportPagePlan(result, options), p = plan.paper;
   const params = { padManufacturing: 'neutral', autoPrecision: true, ...validateProjectParams(result.params) };
@@ -892,6 +924,7 @@ export function paperPatternPlan(result, options = {}) {
       return cleanTemplate(base);
     }
     if(['main','main-local'].includes(id))return cleanTemplate(createMainOpeningPatch(result));
+    if(id==='main-conical'&&result.params.hostType==='cone'){const source=result.templates.find(t=>t.id==='main-conical'||t.id==='main');if(!source)throw new Error('缺少大小頭外壁扇環樣板。');return cleanTemplate(source);}
     const source=result.templates.find(t=>t.id===id);
     if(!source||!id.startsWith('pad'))throw new Error('所選紙樣已不在目前模型中。');
     return cleanTemplate(fieldTemplate(source,result));
@@ -908,9 +941,13 @@ export function paperPatternPlan(result, options = {}) {
 
 export function paperPositionRecipe(template) {
   const m=template.mapping??{};
+  if(m.hostType==='cone'&&template.id.startsWith('main')){
+    if(m.positioning?.A&&m.positioning?.B){const {A,B}=m.positioning;return `先建立母材 A 端與方位 0° 母線；沿錐面母線量距離後，在同一截面轉到指定方位。定位十字 A：母線 ${fmt(A.slant,2)} mm／方位 ${fmt(A.phiDegrees,2)}°；B：母線 ${fmt(B.slant,2)} mm／方位 ${fmt(B.phiDegrees,2)}°。文字面朝外，對準兩十字再描線。${m.motherOpening===false?'母材保持封閉，禁止開孔。':''}`;}
+    return `此為大小頭外壁扇環包覆紙樣，A/B 端對準兩端口，兩條起縫邊貼合成同一母線；文字面朝外。不是中性層鋼板下料。${m.motherOpening===false?'母材保持封閉，禁止開孔。':''}`;
+  }
   if(m.coordinateSystem==='branch-outer-wrap'){
     const datum=m.localCuttingWrap?`從支管自由直端量 ${fmt(m.originalDepthOrigin)} mm 畫一圈，對準紙樣「定位環線」。`:'紙樣深度 0 基準對準自由直端面。';
-    return datum+(m.hostType==='elbow'?'0° 母線朝 A 端的當地切線投影；':'0° 母線朝主管基準端；')+'文字面朝外，右側 0° 與左側 360° 貼回同一母線。';
+    return datum+(m.hostType==='elbow'?'0° 母線朝 A 端的當地切線投影；':m.hostType==='cone'?'0° 母線朝 A 端的當地錐面母線投影；':'0° 母線朝主管基準端；')+'文字面朝外，右側 0° 與左側 360° 貼回同一母線。';
   }
   if(m.localCuttingWrap)return `從支管自由直端量 ${fmt(m.originalDepthOrigin)} mm 畫一圈，對準紙樣「定位環線」。0° 母線朝主管基準端；文字面朝外，右側 0° 與左側 360° 貼回同一母線。`;
   if(m.positioning?.A&&m.positioning?.B){const {A,B}=m.positioning;return `先找主管基準端與背面 0° 起縫。A：距基準端 ${fmt(A.axial,2)} mm、周向 ${fmt(A.arc,2)} mm；B：距基準端 ${fmt(B.axial,2)} mm、周向 ${fmt(B.arc,2)} mm。由基準端看向另一端，沿逆時針量周向，對準 A／B 十字。`}
@@ -970,7 +1007,34 @@ export function openPrintReport(html, filename = '配管製作報告.html') {
  * The default is one portrait work order, with separate optional record pages.
  * This document is a dimension record, never a 1:1 cutting template.
  */
+function conicalWorkOrderPages(result,meta={},options={}){
+  assertValidResult(result);const p=result.params,metadata=cleanMetadata(meta),paper=paperSetup({paper:options.paper??'A4',orientation:'portrait',margin:10}),digits=Math.max(2,Math.min(5,stationDigits(p.tolerance))),v=n=>n===null||n===undefined?'未設定':typeof n==='number'?fmt(n,digits):String(n),pages=[];
+  const id=String(metadata.id??'未編號'),rev=String(metadata.revision??'1'),full=`接頭 ${id} · 版次 ${rev}${metadata.project??metadata.projectName?` · ${metadata.project??metadata.projectName}`:''}${metadata.preparedBy?` · ${metadata.preparedBy}`:''}`,compact=full.length>96?full.slice(0,93)+'…':full;
+  const heading=t=>`<header><h1>${xmlText(t)}</h1><p>${xmlText(compact)}</p></header>`,table=(headers,rows)=>`<table class="cone-table"><thead><tr>${headers.map(h=>`<th>${h}</th>`).join('')}</tr></thead><tbody>${rows.join('')}</tbody></table>`,cells=a=>`<tr>${a.map(q=>`<td>${xmlText(v(q))}</td>`).join('')}</tr>`;
+  const style='<style>.cone-table{width:100%;border-collapse:collapse;table-layout:fixed;font-size:3.2mm;line-height:1.25}.cone-table th,.cone-table td{border:.2mm solid #444;padding:.7mm .9mm;text-align:right;vertical-align:top;overflow-wrap:anywhere}.cone-table th:first-child,.cone-table td:first-child{text-align:left}.cone-table th{font-weight:bold}.cone-datum{border:.4mm solid;padding:2mm 3mm;margin:3mm 0}.cone-datum p{margin:1mm 0}.cone-record{white-space:pre-wrap;overflow-wrap:anywhere;line-height:5mm}.cone-scope{font-size:2.8mm;border-top:.2mm solid;margin-top:3mm;padding-top:2mm}</style>';
+  const opening=p.motherOpening!==false,joint=opening?(p.jointType==='in'?'開孔內插':'外貼開孔'):'外焊支撐 · 母材封閉',wrap=createBranchCuttingWrap(result,{stationCount:12,datumStep:1}),stations=wrap.mapping.stations;
+  const dims=[['母材 A → B',`外徑 Ø${fmt(p.mainOD)} → Ø${fmt(p.mainEndOD)} mm；軸長 ${fmt(p.mainLength)} mm`],['母材壁厚',`${fmt(p.mainWall)} mm 真實法向厚度；實物轉接圓弧不套用本模型`],['支管',`Ø${fmt(p.branchOD)} × ${fmt(p.branchWall)} mm；最短成品長 ${fmt(p.branchLength)} mm`],['接法',`${joint}；與當地母線夾角 ${fmt(p.angle)}°；旋向 ${fmt(p.branchSwivel)}°`],['接合尺寸',p.jointType==='in'?`由近側內壁沿支管軸凸入 ${fmt(p.projection)} mm；孔每側間隙 ${fmt(p.holeGap)} mm`:`外貼法向間隙 ${fmt(p.rootGap)} mm${opening?`；孔每側間隙 ${fmt(p.holeGap)} mm`:''}`]];
+  pages.push(`${style}${heading('大小頭／支管魚口放樣工單')}${table(['尺寸','現場核對'],dims.map(cells))}<div class="cone-datum"><strong>D 定位環：從支管自由直端量 ${fmt(wrap.mapping.originalDepthOrigin)} mm</strong><p>畫一整圈，紙樣 D 環對準此線。0° 朝 A 端的當地母線投影；從自由直端朝接頭看，沿順時針增加。</p></div><h2>12 分點＋360° 閉合</h2><p>內外切深均從同一支管自由直端，沿支管軸量；表列成品尺寸。</p>${table(['站角','外徑管周<br>mm','成品外切深<br>mm','成品內切深<br>mm'],stations.map(q=>cells([`${fmt(q.angle)}°`,q.circumference,q.outerDepth,q.innerDepth])))}<p class="cone-scope">核對尺寸 → 标線 → 切磨 → 試配 → 點固後重測。此為尺寸工單，1:1 貼管紙樣另印；錐管目前沒有全壁厚粗切留料包絡或補強板落料圖。</p>`);
+  const mother=computeExactConicalLocatorTable(result,24),S=p.jointPosition*result.geometry.conical.s,R=p.mainOD/2+result.geometry.conical.k*p.jointPosition;
+  pages.push(`${style}${heading(opening?'大小頭母材開孔定位工單':'大小頭外焊貼合定位 · 禁止開孔')}<div class="cone-datum"><strong>母材 A 端＝X 0；管頂母線＝方位 0°</strong><p>從 A 朝 B 看：0° 上、90° 左、180° 下、270° 右。先沿錐面母線量 S，再在同一截面從 0° 母線量 U，或依方位 φ 找點。</p><p>支管軸線入點：X ${fmt(p.jointPosition)} mm／S ${fmt(S)} mm／φ ${fmt(p.surfaceClock)}°／U ${fmt(R*p.surfaceClock*Math.PI/180)} mm。</p></div><p>${opening?'下表為母材外壁孔口。內壁孔口不同，壁厚加工請核對 3D 與試配。':'下表只標記支撐管外緣貼合位置；母材維持封閉，禁止按輪廓開孔。'} U 使用每一點所在截面的當地周長，不能以單一大端周長代用。</p>${table(['支管站角','X 軸距<br>mm','S 母線<br>mm','方位 φ<br>°','當圈 U<br>mm'],mother.map(q=>cells([`${fmt(q.angle)}°`,q.x,q.slantDistance,q.phiDegrees,q.circumference])))}<p class="cone-scope">錐面能等距展開：局部孔口紙樣通常較省紙；整片扇環可包覆已成形外壁。兩種都是紙樣，不是鋼板中性層下料。本頁尺寸紀錄不以圖示比例裁切。</p>`);
+  const f=options.fabrication===undefined?null:reconcileFitRecords(options.fabrication,p).plan;
+  if(f){const tools={grinder:'砂輪機切割／修磨',saw:'鋸切',plasma:'電漿切割',other:'其他工具'},record=[['工具',tools[f.tool]],['沿軸留料（僅紀錄）',f.stock],['標線最大偏差 ±mm',f.markError],['切磨最大偏差 ±mm',f.cutError],['實測切縫 mm',f.kerf],['WPS／工法版次',f.wpsId||'未設定'],['根隙量測位置／方向',f.gapBasis||'未設定'],['根隙下限／上限 mm',`${v(f.gapMin)} ／ ${v(f.gapMax)}`],['坡口單邊角 °／鈍邊 mm',`${v(f.bevelAngle)} ／ ${v(f.rootFace)}`],['點固參考母線',f.tackAngles.length?f.tackAngles.map(n=>fmt(n)+'°').join('、'):'未指定']];
+    if(f.wpsId||f.gapBasis||[f.stock,f.markError,f.cutError,f.kerf,f.gapMin,f.gapMax,f.bevelAngle,f.rootFace].some(x=>x!==null)||f.tackAngles.length)pages.push(`${style}${heading('加工與工法紀錄')}${table(['紀錄項目','目前填入值'],record.map(cells))}<p class="cone-scope">此頁只保留填入的加工與焊接紀錄。錐管無全壁厚粗切包絡；不能把留料或工具偏差直接當焊接根隙。坡口及焊道未生成幾何曲面。</p>`);
+    if(f.preGaps.some(q=>q!==null)||f.postGaps.some(q=>q!==null)||f.edgeCondition!=='unknown')for(let start=0;start<f.count;start+=12){const pre=fitPhaseStatus(f),post=fitPhaseStatus(f,'post'),rows=Array.from({length:Math.min(12,f.count-start)},(_,i)=>{const j=start+i;return cells([`P${j+1} · ${fmt(j*360/f.count)}°`,f.preGaps[j],f.postGaps[j],`前 ${fitPointStatus(f,j).label}／後 ${fitPointStatus(f,j,'post').label}`]);});pages.push(`${style}${heading('試配與點固後根隙紀錄')}<p>試配：${xmlText(pre.label)}；點固後：${xmlText(post.label)}。工法 ${xmlText(f.wpsId||'未設定')}；基準 ${xmlText(f.gapBasis||'未設定')}。</p>${table(['分點','試配 mm','點固後 mm','記錄狀態'],rows)}<p class="cone-scope">P 點從支管自由端朝接頭看、由 0° 順時針增加；T 只作母線參考。未量測維持未知；分點在填入範圍內不等於全周或焊接接受性。</p>`);}
+  }
+  if(options.includeValidation)pages.push(`${style}${heading('大小頭幾何計算核對')}${table(['核對項目','數值','容差','狀態'],result.verification.map(q=>cells([q.label,`${v(q.value)} ${q.unit}`,q.tolerance,statusText(q.status)])))}<h2>理想模型與現場界限</h2>${safeMessages(result.warnings).map(q=>`<p>${xmlText(q)}</p>`).join('')}<p>本模型依兩端外徑及軸長建立同心直錐面，壁厚沿法線量測。交線為解析二次方程求交；錐面扇環是外表面等距包覆，沒有使用柱面公式。</p><p class="cone-scope">數值幾何不驗證承壓、補強面積、支撐荷重或焊道強度。實物若有轉接圓弧、偏心或成形變形，須先量測並另用適合的母材模型。</p>`);
+  const textRecords=[...(full.length>96?[['完整接頭資料',full]]:[]),...(metadata.notes?[['專案備註',metadata.notes]]:[]),...(f?.weldNote?[['焊接順序／焊道紀錄',f.weldNote]]:[]),...(f?.disposition?[['修整與處置紀錄',f.disposition]]:[])];
+  for(const[label,text]of textRecords){const lines=text.replace(/\r\n?/g,'\n').split('\n').flatMap(line=>svgTextLines(line,paper.contentW-6,3.2)),capacity=Math.floor((paper.contentH-55)/5);for(let start=0;start<lines.length;start+=capacity)pages.push(`${style}${heading(`${label}${start?'（續）':''}`)}<p class="cone-record">${xmlText(lines.slice(start,start+capacity).join('\n'))}</p>`);}
+  return pages;
+}
+
+export function buildConicalWorkOrderHTML(result,meta={},options={}){
+  if(result.params?.hostType!=='cone')throw new Error('此工單僅適用同心直錐台。');if(options.orientation&&!['portrait','auto'].includes(options.orientation))throw new Error('大小頭現場工單使用直式；1:1 紙樣可另選方向。');
+  const paper=paperSetup({paper:options.paper??'A4',orientation:'portrait',margin:10}),pages=conicalWorkOrderPages(result,meta,options);return paperPrintDocument(paper,`${meta.id??'未編號'} · 大小頭現場工單`,pages);
+}
+
 export function buildFieldWorkOrderHTML(result, meta = {}, options = {}) {
+  if(result.params?.hostType==='cone')return buildConicalWorkOrderHTML(result,meta,options);
   if(result.params?.hostType==='elbow')return buildElbowWorkOrderHTML(result,meta,options);
   assertValidResult(result);
   const params = { padManufacturing: 'neutral', autoPrecision: true, ...validateProjectParams(result.params) };

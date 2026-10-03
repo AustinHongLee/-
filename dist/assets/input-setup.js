@@ -7,10 +7,10 @@ export const pipeSizeByNPS=nps=>ASME_PIPE_SIZES.find(size=>size.nps===nps)??null
 // Never snap an imported or measured diameter to a nearby nominal size.
 export const pipeSizeByOD=diameter=>ASME_PIPE_SIZES.find(size=>size.odMm===diameter)??null;
 export function setupFromParams(params,saved=null) {
-  const datum=params.hostType==='elbow'?null:mainAxisSurfaceDatum(params);
-  const setup={mainSize:pipeSizeByOD(params.mainOD)?.nps??'custom',branchSize:pipeSizeByOD(params.branchOD)?.nps??'custom',positionMode:'custom',surfaceDistance:datum?.axialPosition??NaN};
+  const datum=params.hostType==='cone'?{axialPosition:params.jointPosition}:params.hostType==='elbow'?null:mainAxisSurfaceDatum(params);
+  const setup={mainSize:pipeSizeByOD(params.mainOD)?.nps??'custom',branchSize:pipeSizeByOD(params.branchOD)?.nps??'custom',endSize:pipeSizeByOD(params.mainEndOD)?.nps??'custom',positionMode:'custom',surfaceDistance:datum?.axialPosition??NaN};
   if(saved&&typeof saved==='object'){
-    for(const [key,diameter] of [['mainSize',params.mainOD],['branchSize',params.branchOD]]){
+    for(const [key,diameter] of [['mainSize',params.mainOD],['branchSize',params.branchOD],['endSize',params.mainEndOD]]){
       if(saved[key]==='custom'||pipeSizeByNPS(saved[key])?.odMm===diameter)setup[key]=saved[key];
     }
     // Restore an explicitly saved intent only when it agrees with the actual geometry.
@@ -29,7 +29,7 @@ export function positionWithIntent(params,setup) {
   if(params.hostType==='elbow'&&params.elbowAlignment&&params.elbowAlignment!=='free')return resolveElbowAlignment(params);
   if(params.hostType==='elbow')return {...params,bendPosition:setup.bendPositionMode==='center'?params.bendAngle/2:Number.isFinite(setup.bendBackDistance)?bendPositionFromBack(setup.bendBackDistance,params):params.bendPosition};
   const distance=setup.positionMode==='center'?params.mainLength/2:setup.surfaceDistance;
-  return {...params,jointPosition:jointPositionForSurface(params,distance)};
+  return {...params,jointPosition:params.hostType==='cone'?distance:jointPositionForSurface(params,distance)};
 }
 export function freshInputParams(defaults) {
   const params={...defaults,mainOD:pipeSizeByNPS('8').odMm,branchOD:pipeSizeByNPS('4').odMm};

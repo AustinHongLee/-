@@ -1,4 +1,5 @@
 import {resolveElbowAlignment,elbowAlignmentReference} from './elbow-axis.js';
+import {computeFormedElbowPad} from './formed-elbow-pad.js';
 /** Ideal finite circular elbow + straight branch, millimetres/degrees.
  * No dependency on the existing Site checkout. Torus coordinates are NOT an
  * isometric development of the elbow. Only the straight branch is developed.
@@ -129,7 +130,7 @@ function validate(raw) {
   if(!['on','in'].includes(p.jointType))error('jointType','接頭型式須為 on 或 in。');
   if(!Number.isInteger(p.samples)||p.samples<36||p.samples>ELBOW_SAMPLE_CAP)error('samples','取樣段數須為 36 至 4096 的整數。');
   if(typeof p.autoPrecision!=='boolean')error('autoPrecision','自動精度設定須為布林值。');
-  if(p.padEnabled)error('padEnabled','此版彎頭補強板尚未支援；请关闭補強板。');
+  if(typeof p.padEnabled!=='boolean')error('padEnabled','補強板設定須為布林值。');
   p.surfaceClock=((p.surfaceClock%360)+360)%360;
   p.branchSwivel=((p.branchSwivel+180)%360+360)%360-180;
   p.hostType='elbow';return {p,errors};
@@ -401,13 +402,25 @@ function build(raw) {
     projectionAvailable:minimumProjectionClearance<Infinity?minimumProjectionClearance:null,
     projectedLength:model.projection,normalDotDirection:model.normalDotDirection,minIntersectionNormalDot:minNormalDot,
     elbowCenterlineLength:model.Rc*model.bend,elbowBackSpineLength:(model.Rc+model.R)*model.bend};
-  return {valid:true,params:p,errors:[],warnings,templates:[template],geometry,verification,measurements,stationTable,
+  const result={valid:true,params:p,errors:[],warnings,templates:[template],geometry,verification,measurements,stationTable,
     sampling:{sampledMaxChordError,guardFactor:GUARD},
     wallEnvelope:{method:model.normalExtrados&&p.jointType==='on'?'analytic-extrados-outward-retained-body-clearance':
       'radial-wall-stations-interior-angular-probes-and-polished-insertion-limits',radii:wallRadii,
       angularSamples:model.normalExtrados&&p.jointType==='on'?0:wallAngularSamples,checks:wallChecks,
       retainedBodyMethod:model.normalExtrados?'analytic-extrados-radial-monotonicity':'finite-probes',
       rigorous:false,roughCutSupported:false},capabilities:{motherOpening:opening,roughCut:false,pad:false,wholeHostDevelopment:false}};
+  if(p.padEnabled){
+    const formed=computeFormedElbowPad(result,p);
+    if(!formed.valid){errors.push(...formed.errors);return fail();}
+    for(const field of ['padThickness','padMargin','padClearance','padShape','padSplit'])p[field]=formed.params[field];
+    result.geometry.pad=formed.pad;
+    result.formedPad={stationTable:formed.stationTable,edgeStationTable:formed.edgeStationTable,
+      capabilities:formed.capabilities,validation:formed.validation};
+    result.capabilities.pad=true;result.capabilities.padFlatDevelopment=false;
+    result.verification.push(...formed.verification);result.warnings.push(...formed.warnings);
+    Object.assign(result.measurements,formed.measurements);
+  }
+  return result;
 }
 
 export function computeElbowJoint(raw={}) {

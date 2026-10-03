@@ -2,10 +2,22 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { cylindricalUVToWorld, rotateAroundMain } from './geometry.js';
 import { torusSurfacePoint, elbowFrame } from './elbow-geometry.js';
+import { conicalSurfacePoint,conicalCoordinates } from './conical-geometry.js';
 
 const TAU = Math.PI * 2;
 const open = p => p.slice(0, -1);
 const path = points => new THREE.Path(points.map(p => new THREE.Vector2(...p)));
+
+function conicalSurface(c,p,offset,hole,inward=false){
+  const center=(p.surfaceClock??0)*Math.PI/180,lo=center-Math.PI,hi=center+Math.PI,scale=Math.max(...c.outerRadii);
+  const outer=[[0,scale*lo],[c.length,scale*lo],[c.length,scale*hi],[0,scale*hi],[0,scale*lo]],shape=new THREE.Shape(open(outer).map(q=>new THREE.Vector2(...q)));
+  if(hole?.length)shape.holes=[path(open(hole).map(q=>[q[0],scale*(center+Math.atan2(Math.sin(Math.atan2(q[1],q[2])-center),Math.cos(Math.atan2(q[1],q[2])-center)))]))];
+  const flat=new THREE.ShapeGeometry(shape),attr=flat.getAttribute('position'),indices=flat.index?.array??Array.from({length:attr.count},(_,i)=>i),positions=[],normals=[];
+  const add=(a,b,d,depth=0)=>{const pairs=[[a,b,d],[b,d,a],[d,a,b]],size=e=>Math.abs(e[0][1]-e[1][1])/scale,worst=pairs.reduce((best,e)=>size(e)>size(best)?e:best);
+    if(size(worst)>Math.PI/36&&depth<17){const[u,v,w]=worst,mid=u.map((x,i)=>(x+v[i])/2);add(u,mid,w,depth+1);add(mid,v,w,depth+1);return;}
+    for(const[x,u]of[a,b,d]){const q=conicalSurfacePoint(x,u/scale,p,offset),normal=conicalCoordinates(q,p,offset).normal;positions.push(...q);normals.push(...normal.map(v=>inward?-v:v));}};
+  for(let i=0;i<indices.length;i+=3)add(...Array.from(indices.slice(i,i+3),j=>[attr.getX(j),attr.getY(j)]));flat.dispose();const geo=new THREE.BufferGeometry();geo.setAttribute('position',new THREE.Float32BufferAttribute(positions,3));geo.setAttribute('normal',new THREE.Float32BufferAttribute(normals,3));return geo;
+}
 
 function elbowSurface(e,r,hole,inward=false) {
   const phi=e.surfaceClock,lo=phi-Math.PI,hi=phi+Math.PI,R=e.bendRadius;
@@ -22,6 +34,13 @@ function elbowSurface(e,r,hole,inward=false) {
   };
   for(let i=0;i<indices.length;i+=3)add(...Array.from(indices.slice(i,i+3),j=>[attr.getX(j),attr.getY(j)]));
   flat.dispose();const geo=new THREE.BufferGeometry();geo.setAttribute('position',new THREE.Float32BufferAttribute(positions,3));geo.setAttribute('normal',new THREE.Float32BufferAttribute(normals,3));return geo;
+}
+
+function formedElbowPadSurface(pad,r,outer,hole,inward=false){
+  const R=pad.bendRadius,shape=new THREE.Shape(open(outer).map(q=>new THREE.Vector2(...q)));shape.holes=[path(open(hole))];
+  const flat=new THREE.ShapeGeometry(shape),attr=flat.getAttribute('position'),indices=flat.index?.array??Array.from({length:attr.count},(_,i)=>i),positions=[],normals=[];
+  const add=(a,b,c,depth=0)=>{const pairs=[[a,b,c],[b,c,a],[c,a,b]],size=q=>Math.max(Math.abs(q[0][0]-q[1][0])/R,Math.abs(q[0][1]-q[1][1])/r),worst=pairs.reduce((v,q)=>size(q)>size(v)?q:v);if(size(worst)>Math.PI/36&&depth<17){const[u,v,w]=worst,mid=u.map((x,i)=>(x+v[i])/2);add(u,mid,w,depth+1);add(mid,v,w,depth+1);return;}for(const[x,u]of[a,b,c]){const beta=x/R,phi=u/r,f=elbowFrame(beta,R);positions.push(...torusSurfacePoint(beta,phi,R,r));normals.push(...f.normal.map((v,i)=>(v*Math.cos(phi)+f.binormal[i]*Math.sin(phi))*(inward?-1:1)));}};
+  for(let i=0;i<indices.length;i+=3)add(...Array.from(indices.slice(i,i+3),j=>[attr.getX(j),attr.getY(j)]));flat.dispose();const geo=new THREE.BufferGeometry();geo.setAttribute('position',new THREE.Float32BufferAttribute(positions,3));geo.setAttribute('normal',new THREE.Float32BufferAttribute(normals,3));return geo;
 }
 
 function surface(outer, holes, radius, azimuth, inward = false) {
@@ -137,6 +156,15 @@ export class JointViewer {
       this.label('A 端',a.center.map((v,i)=>v-a.tangent[i]*labelSize*1.5),this.parts.main,labelSize);
       if(axes.reference){const ref=axes.reference,len=b.axisEnd+p.mainOD,guide=this.line([ref.center,axes.branchOrigin.map((v,i)=>v+axes.branchDirection[i]*len)],0xffd16a,this.parts.main,true);guide.material.depthTest=false;guide.renderOrder=10;}
       this.label('B 端',end.center.map((v,i)=>v+end.tangent[i]*labelSize*1.5),this.parts.main,labelSize);
+    } else if(p.hostType==='cone'){
+      const c=result.geometry.conical;
+      for(const[offset,hole,inward]of[[0,c.outerHole3D,false],[-p.mainWall,c.innerHole3D,true]])this.mesh(conicalSurface(c,p,offset,hole,inward),mainMat.clone(),this.parts.main);
+      if(c.motherOpening!==false)this.mesh(loft(c.outerHole3D,c.innerHole3D),mainMat.clone(),this.parts.main);
+      const ring=(x,offset)=>Array.from({length:97},(_,i)=>conicalSurfacePoint(x,TAU*i/96,p,offset));
+      for(const x of[0,c.length]){this.mesh(loft(ring(x,0),ring(x,-p.mainWall)),mainMat.clone(),this.parts.main);this.line(ring(x,0),0xa7bbd0,this.parts.main);}
+      this.line(c.motherOpening===false?c.outerContact3D:c.outerHole3D,c.motherOpening===false?0xe5a343:0xc4d4e8,this.parts.main,c.motherOpening===false);
+      const seam=c.mapping.seamAngle;this.line([conicalSurfacePoint(0,seam,p,.3),conicalSurfacePoint(c.length,seam,p,.3)],0x677e99,this.parts.main,true);
+      const size=Math.max(12,Math.min(...c.outerRadii)*.24);this.label('A 端',[-size*1.5,0,0],this.parts.main,size);this.label('B 端',[c.length+size*1.5,0,0],this.parts.main,size);
     } else {
     const ring=(x,r)=>Array.from({length:97},(_,i)=>cylindricalUVToWorld([x,r*(-Math.PI+TAU*i/96)],r,p.azimuth));
     for(const [r,hole,inward] of [[m.outerRadius,m.outerHoleUV,false],[m.innerRadius,m.innerHoleUV,true]]) {
@@ -155,7 +183,14 @@ export class JointViewer {
     for(const [a,c] of [[b.outerCut,b.outerEnd],[b.innerCut,b.innerEnd],[b.outerCut,b.innerCut],[b.outerEnd,b.innerEnd]])this.mesh(loft(a,c),branchMat.clone(),this.parts.branch);
     this.line(b.outerCut,0xa7e8ff,this.parts.branch);this.line(b.outerEnd,0xa7e8ff,this.parts.branch);
     this.line([b.outerCut[0],b.outerEnd[0]],0xc6f0ff,this.parts.branch,true);
-    if(pad) {
+    if(pad?.hostType==='elbow'){
+      this.mesh(formedElbowPadSurface(pad,pad.innerRadius,pad.innerBoundaryUV,pad.innerHoleUV,true),padMat.clone(),this.parts.pad);
+      this.mesh(formedElbowPadSurface(pad,pad.outerRadius,pad.outerBoundaryUV,pad.outerHoleUV),padMat.clone(),this.parts.pad);
+      this.mesh(loft(pad.innerBoundary3D,pad.outerBoundary3D),padMat.clone(),this.parts.pad);
+      this.mesh(loft(pad.innerHole3D,pad.outerHole3D),padMat.clone(),this.parts.pad);
+      this.line(pad.outerBoundary3D,0xffd099,this.parts.pad);this.line(pad.outerHole3D,0xffd099,this.parts.pad);
+      for(const line of pad.splitReference3D??[])this.line(line,0x72491d,this.parts.pad);
+    }else if(pad) {
       const basisRadius=pad.developmentRadius??pad.neutralRadius;
       const innerOuter=pad.outerUV.map(([x,u])=>[x,u*pad.innerRadius/basisRadius]);
       const outerOuter=pad.outerUV.map(([x,u])=>[x,u*pad.outerRadius/basisRadius]);
@@ -185,9 +220,9 @@ export class JointViewer {
     if(!this.result?.valid||!this.available)return;
     const p=this.result.params,d=this.result.geometry.axes.branchDirection;
     this.parts.branch.position.set(...d.map(v=>v*(this.flags.explode?70:0)));
-    const outward=rotateAroundMain([0,0,this.flags.explode?35:0],p.azimuth);this.parts.pad.position.set(...outward);
-    const origin=this.result.geometry.axes.branchOrigin??[0,0,0],normal=p.hostType==='elbow'?this.result.geometry.axes.station90:rotateAroundMain([0,1,0],p.azimuth);
-    const plane=new THREE.Plane(new THREE.Vector3(...normal),p.hostType==='elbow'?-normal.reduce((sum,v,i)=>sum+v*origin[i],0):-p.offset);
+    const outward=this.result.geometry.pad?.hostType==='elbow'?this.result.geometry.axes.hostNormal.map(v=>v*(this.flags.explode?35:0)):rotateAroundMain([0,0,this.flags.explode?35:0],p.azimuth);this.parts.pad.position.set(...outward);
+    const origin=this.result.geometry.axes.branchOrigin??[0,0,0],local=p.hostType==='elbow'||p.hostType==='cone',normal=local?this.result.geometry.axes.station90:rotateAroundMain([0,1,0],p.azimuth);
+    const plane=new THREE.Plane(new THREE.Vector3(...normal),local?-normal.reduce((sum,v,i)=>sum+v*origin[i],0):-p.offset);
     this.model.traverse(o=>{if(o.isMesh){o.material.transparent=this.flags.transparent;o.material.opacity=this.flags.transparent?.32:1;o.material.depthWrite=!this.flags.transparent;o.material.clippingPlanes=this.flags.section?[plane]:[];o.material.needsUpdate=true;}});
     this.render();
   }

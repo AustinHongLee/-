@@ -5,7 +5,7 @@ export const FIT_COUNTS = [4, 8, 12, 24];
 const NUMBER_KEYS = ['stock','markError','cutError','kerf','gapMin','gapMax','bevelAngle','rootFace'];
 const TEXT_LIMITS = {wpsId:100,gapBasis:180,weldNote:500,disposition:500,inspectionKey:10000};
 const PARAM_KEYS = ['mainOD','mainWall','mainLength','jointPosition','branchOD','branchWall','branchLength','angle','azimuth','offset','jointType','projection','rootGap','holeGap','padEnabled','padShape','padSplit','padThickness','padMargin','padClearance','kFactor','padManufacturing'];
-export function geometryRecordKey(params) { const keys=params.hostType==='elbow'?[...PARAM_KEYS,'hostType','bendRadius','bendAngle','bendPosition','surfaceClock','branchSwivel']:PARAM_KEYS;if(params.hostType==='elbow'){if(params.elbowAlignment&&params.elbowAlignment!=='free')keys.push('elbowAlignment');if(params.motherOpening===false)keys.push('motherOpening');}return JSON.stringify(keys.map(k => [k, params[k]])); }
+export function geometryRecordKey(params) { const keys=params.hostType==='cone'?[...PARAM_KEYS,'hostType','mainEndOD','surfaceClock','branchSwivel','motherOpening']:params.hostType==='elbow'?[...PARAM_KEYS,'hostType','bendRadius','bendAngle','bendPosition','surfaceClock','branchSwivel']:PARAM_KEYS;if(params.hostType==='elbow'){if(params.elbowAlignment&&params.elbowAlignment!=='free')keys.push('elbowAlignment');if(params.motherOpening===false)keys.push('motherOpening');}return JSON.stringify(keys.map(k => [k, params[k]])); }
 export function emptyFabricationPlan() {
   return {version:1,tool:'grinder',stock:null,markError:null,cutError:null,kerf:null,wpsId:'',gapMin:null,gapMax:null,gapBasis:'',bevelAngle:null,rootFace:null,weldNote:'',count:4,tackAngles:[],preGaps:Array(4).fill(null),postGaps:Array(4).fill(null),edgeCondition:'unknown',disposition:'',inspectionKey:''};
 }
@@ -72,7 +72,7 @@ export function roughDepth(outerDepth,innerDepth,stock) {
   return Math.max(outerDepth,innerDepth)+stock;
 }
 export function createRoughCutTemplate(base,plan) {
-  if(base?.mapping?.hostType==='elbow')throw new Error('彎頭尚未提供連續全壁厚粗切留料包絡；請使用成品魚口紙樣。');
+  if(['elbow','cone'].includes(base?.mapping?.hostType))throw new Error('此母材尚未提供連續全壁厚粗切留料包絡；請使用成品魚口紙樣。');
   const p=validateFabricationPlan(plan); if(p.stock===null) return null;
   const m=base.mapping,outer=m?.originalOuterCut,inner=m?.originalInnerEdge;
   if(!outer?.length||inner?.length!==outer.length||m.paperTransform!=='branch-mirror-x') throw new Error('加工樣帶缺少同角度內外緣資料。');
@@ -94,7 +94,7 @@ export function fabricationCSV(plan,stations,options={}) {
   const p=validateFabricationPlan(plan),safe=s=>{const text=String(s??'');return '"'+(/^\s*[=+@\-]/.test(text)?"'"+text:text).replaceAll('"','""')+'"';};
   if(!Array.isArray(stations)||stations.length<p.count||stations.slice(0,p.count).some((s,i)=>!s||!Number.isFinite(s.angle)||Math.abs(s.angle-i*360/p.count)>1e-7||!Number.isFinite(s.outerDepth)||!Number.isFinite(s.innerDepth))) throw new Error('尺寸分點須與實測分點角度一致。');
   const rows=[['加工與試配紀錄（未填值為未知；範圍核對不代表焊接核准）'],['加工工具',p.tool],['沿軸粗切留料 mm',p.stock??''],['預估標線最大沿軸偏差 ±mm',p.markError??''],['預估切磨最大沿軸偏差 ±mm',p.cutError??''],['實測切縫寬度 mm',p.kerf??''],['坡口單邊角 °（工藝記錄）',p.bevelAngle??''],['鈍邊 mm（工藝記錄）',p.rootFace??''],['切口狀況',p.edgeCondition],['焊道／點固／順序記錄',p.weldNote],['修整／修復處置紀錄',p.disposition],[],['分點角度 °','成品外緣深度 mm','成品內緣深度 mm','粗切深度 mm（沿支管軸）','試配根隙 mm','點固後根隙 mm','點固參考','工法編號/版次','根隙量測方向/位置','根隙下限 mm','根隙上限 mm','試配記錄狀態','點固後記錄狀態']];
-  const roughSupported=options.roughCutSupported!==false&&!stations.some(s=>s?.hostType==='elbow');
+  const roughSupported=options.roughCutSupported!==false&&!stations.some(s=>['elbow','cone'].includes(s?.hostType));
   if(!roughSupported)rows.splice(1,0,['彎頭未提供全壁厚粗切包絡；留料是使用者工藝記錄，粗切深度留白']);
   stations.slice(0,p.count).forEach((s,i)=>rows.push([s.angle,s.outerDepth,s.innerDepth,p.stock===null||!roughSupported?'':roughDepth(s.outerDepth,s.innerDepth,p.stock),p.preGaps[i]??'',p.postGaps[i]??'',p.tackAngles.includes(s.angle)?'是':'',p.wpsId,p.gapBasis,p.gapMin??'',p.gapMax??'',fitPointStatus(p,i).label,fitPointStatus(p,i,'post').label]));
   return '\uFEFF'+rows.map(r=>r.map(safe).join(',')).join('\r\n')+'\r\n';

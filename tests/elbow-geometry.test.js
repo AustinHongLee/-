@@ -147,8 +147,8 @@ test('manual low precision retains preview but blocks manufacturing; auto precis
   assert.ok(auto.wallEnvelope.rigorous===false);assert.equal(auto.capabilities.roughCut,false);
 });
 
-test('unsupported pad, non-ring torus, non-outgoing branch and bad exact counts fail clearly',()=>{
-  for(const p of [{padEnabled:true},{bendRadius:100},{bendAngle:181},{branchSwivel:100},{bendPosition:0}])
+test('out-of-bounds pad, non-ring torus, non-outgoing branch and bad exact counts fail clearly',()=>{
+  for(const p of [{padEnabled:true,padMargin:1000},{bendRadius:100},{bendAngle:181},{branchSwivel:100},{bendPosition:0}])
     assert.equal(computeElbowJoint({...base,...p}).valid,false);
   assert.throws(()=>computeExactElbowStationTable(base,0),RangeError);
   assert.throws(()=>computeExactElbowHoleTable(base,3.2),RangeError);
