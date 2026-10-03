@@ -180,7 +180,24 @@ function paperOptions(){return {paper:$('paper-size').value,orientation:$('paper
 function populatePaperParts(){const checked=new Set([...$('paper-parts').querySelectorAll('input:checked')].map(el=>el.value)),ts=paperTemplates();const selected=ts.some(t=>checked.has(t.id))?checked:new Set([ts.some(t=>t.id===state.template)?state.template:ts[0]?.id]);$('paper-parts').innerHTML='<legend>這次印哪個零件？</legend>'+ts.map(t=>`<label><input type="checkbox" value="${t.id}"${selected.has(t.id)?' checked':''}>${esc(t.id.startsWith('branch')?'支管魚口'+(t.id==='branch-rough'?' · 含粗切留料':''):t.id==='main-local'?'主管開孔':t.title)}</label>`).join('');}
 function updatePaperPlan(){try{const plan=paperPatternPlan(state.result,paperOptions());$('paper-page-count').textContent=`${plan.paper.paper} ${plan.paper.orientation==='landscape'?'橫式':'直式'}：紙樣 ${plan.paperPages} 張${plan.guidePages?' ＋ 校正說明 1 張':''}。${plan.parts.map(p=>`${p.template.id.startsWith('branch')?'支管':p.template.id.startsWith('main')?'主管':p.template.title} ${p.columns} 欄 × ${p.rows} 列`).join('；')}`;$('paper-preview').disabled=false;}catch(e){$('paper-page-count').textContent=e.message;$('paper-preview').disabled=true;}}
 function openPaperDialog(){safeAction(async()=>{if(pending)await compute();if(pending)throw new Error('尺寸正在更新，請完成後再列印。');const r=fabricationReadiness(state.result);if(!r.ready)throw new Error(r.reason);$('paper-parts').replaceChildren();populatePaperParts();updatePaperPlan();$('paper-dialog').showModal();},false);}
-function fitReportPreview(){const frame=$('report-frame'),doc=frame.contentDocument,page=doc?.querySelector('.page');if(!page||frame.clientWidth<=0)return;let style=doc.querySelector('#preview-fit');if(!style){style=doc.createElement('style');style.id='preview-fit';doc.head.append(style);}style.textContent='';const natural=page.getBoundingClientRect().width,scale=Math.min(1,(frame.clientWidth-24)/natural);style.textContent=`@media screen{.page{zoom:${scale};}body{overflow-x:hidden;}}@media print{.page{zoom:1!important;}}`;}
+function fitReportPreview(){
+  const frame=$('report-frame'),doc=frame.contentDocument;
+  if(!doc?.querySelector('.page')||frame.clientWidth<=0)return;
+  let style=doc.querySelector('#preview-fit');
+  if(!style){style=doc.createElement('style');style.id='preview-fit';doc.head.append(style);}
+  style.textContent='';
+  for(const wrapper of doc.querySelectorAll('.preview-sheet'))wrapper.replaceWith(...wrapper.children);
+  const pages=[...doc.querySelectorAll('.page')],natural=Math.max(...pages.map(page=>page.getBoundingClientRect().width)),
+    scale=Math.min(1,(frame.clientWidth-24)/natural);
+  for(const page of pages){
+    const bounds=page.getBoundingClientRect(),wrapper=doc.createElement('div');
+    wrapper.className='preview-sheet';wrapper.dataset.previewLast=String(page===pages.at(-1));wrapper.style.width=`${bounds.width*scale}px`;wrapper.style.height=`${bounds.height*scale}px`;
+    page.before(wrapper);wrapper.append(page);
+  }
+  // Scale a fully laid out physical page. CSS zoom rounds thin table borders
+  // independently and can push a 25-row table into its footer on a phone.
+  style.textContent=`@media screen{.preview-sheet{margin:8mm auto;overflow:hidden;background:white;box-shadow:0 1mm 4mm #0002}.page{margin:0!important;transform:scale(${scale});transform-origin:top left;box-shadow:none!important}body{overflow-x:hidden;}}@media print{.preview-sheet{display:contents}.preview-sheet>.page{transform:none!important;zoom:1!important;break-after:page;page-break-after:always}.preview-sheet[data-preview-last="true"]>.page{break-after:auto;page-break-after:auto}}`;
+}
 function persistProject(){try{localStorage.setItem('pipe-fabrication:last',projectJSON(state.params,state.metadata,state.fabrication));localStorage.setItem('pipe-fabrication:input-setup',JSON.stringify({paramsKey:JSON.stringify(state.params),setup:inputSetup}));}catch{}}
 function renderFavorites(){const selected=$('favorite-select').value!==''?$('favorite-select').selectedOptions[0]?.textContent:'';$('favorite-select').innerHTML='<option value="">選擇已記住的尺寸</option>'+favorites.map((f,i)=>`<option value="${i}">${esc(f.name)}</option>`).join('');const index=favorites.findIndex(f=>f.name===selected);$('favorite-select').value=index<0?'':String(index);$('apply-favorite').disabled=$('favorite-select').value==='';}
 function loadParameters(params,metadata=state.metadata,recordHistory=true,savedSetup=null,plan=emptyFabricationPlan()){const candidate={...DEFAULT_PARAMS,...params},r=computeJoint(candidate);if(!r.valid)throw new Error(r.errors.map(e=>e.message).join(' '));const restoredPlan=reconcileFitRecords(plan,candidate).plan;state.params=candidate;state.fabrication=restoredPlan;renderFitup(true);syncInputSetup(savedSetup);state.metadata={...metadata};$('joint-id').value=state.metadata.id;renderForm();compute(recordHistory);viewer.fit();}
