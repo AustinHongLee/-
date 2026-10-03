@@ -280,6 +280,11 @@ function build(raw) {
     const checkWall=(radius,theta)=>{
       const f=model.foot(radius,theta),nearOuter=model.near(radius,model.R,theta),nearInner=p.jointType==='in'?model.near(radius,model.Ri,theta):null;
       const cut=model.cut(radius,theta),caps=model.endPlanes(f);
+      // A doubly curved mother can have a maximum cut depth inside the
+      // annular wall, even when both face contours stop before the free end.
+      // Treat sampled zero/negative retained length as a real invalid body.
+      // This adds a finite-probe safety gate, not a whole-wall extrema proof.
+      if(cut.t>=endT-1e-7){const error=new RangeError('支管壁厚內的切口到達或超過自由直端；請增加支管最短長度後重新核對。');error.field='branchLength';throw error;}
       // Normal extrados: after the near cut, u=Rc+R+t grows, and
       // hypot(hypot(u,w)-Rc,z) is monotone. beta converges toward beta0.
       // Thus no retained outward portion can hit another arm or end annulus.
@@ -345,7 +350,7 @@ function build(raw) {
         checkWall(radius,(lo+hi)/2);
       }
     }
-  }catch(e){return fail('elbowGeometry',e.message);}
+  }catch(e){return fail(e.field??'elbowGeometry',e.message);}
   const C=TAU*model.ro,outerCut=outer.map(q=>q.point),innerCut=inner.map(q=>q.point);
   const endRing=radius=>close(Array.from({length:n},(_,i)=>add(model.foot(radius,TAU*i/n),mul(model.d,endT))));
   const branchCurve=outer.map((q,i)=>[C*i/n,endT-q.t]),innerCurve=inner.map((q,i)=>[C*i/n,endT-q.t]);
@@ -418,6 +423,13 @@ function build(raw) {
       capabilities:formed.capabilities,validation:formed.validation};
     result.capabilities.pad=true;result.capabilities.padFlatDevelopment=false;
     result.verification.push(...formed.verification);result.warnings.push(...formed.warnings);
+    // One manufacturing precision gate includes every emitted curved contour.
+    // A precise branch cut must not hide an under-sampled plate face or edge.
+    const jointChord=result.verification.find(v=>v.id==='chord'),padChord=formed.verification.find(v=>v.id==='formed-pad-chord');
+    jointChord.value=Math.max(jointChord.value,padChord.value);
+    jointChord.status=jointChord.value<=p.tolerance?'pass':'warning';
+    result.sampling.sampledMaxChordError=Math.max(result.sampling.sampledMaxChordError,formed.sampling.sampledMaxChordError);
+    result.formedPad.sampling=formed.sampling;
     Object.assign(result.measurements,formed.measurements);
   }
   return result;

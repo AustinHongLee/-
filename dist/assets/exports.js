@@ -133,7 +133,7 @@ function geometryMarkup(t, options = {}) {
   output += `<g data-layer="REMOVE_MARK" stroke-width="0.3">${t.holes.map(h => crossesAt(centroid(h))).join('')}</g></g>`;
   if ((t.id === 'branch' || t.mapping?.coordinateSystem === 'branch-outer-wrap') && t.mapping?.paperTransform !== 'branch-mirror-x') {
     output += `<g data-layer="ANGLE_MARK" fill="#000" font-size="2.4"><text x="1" y="3">0° 起縫</text><text x="${fmt(t.width - 31)}" y="3">360° 同起縫</text><text x="${fmt(t.width / 2)}" y="5" text-anchor="middle">圓周弧長 →</text></g>`;
-  } else if (t.id === 'main' && !t.mapping?.cropOrigin) {
+  } else if (t.id === 'main' && t.mapping?.hostType !== 'cone' && !t.mapping?.cropOrigin) {
     output += `<g data-layer="ANGLE_MARK" fill="#000" font-size="2.4"><text x="1" y="3">0° 背面起縫</text><text x="${fmt(t.width - 31)}" y="3">360° 同起縫</text><text x="${fmt(t.width / 2)}" y="5" text-anchor="middle">主管周向弧長 U →</text></g>`;
   }
   return output;
@@ -742,6 +742,7 @@ function templateAxes(template) {
 }
 function templateLegend(t) {
   if(t.mapping?.hostType==='cone'&&t.id.startsWith('main')&&t.mapping?.motherOpening===false)return '母材封閉；虛線＝貼合定位；細點框只裁紙；禁止依輪廓開孔';
+  if(t.mapping?.hostType==='cone'&&t.id.startsWith('main'))return '孔口實線＝金屬切線；細點扇環／矩形只裁紙；外壁包覆紙樣，非鋼板落料';
   if (t.id==='branch-rough') return '粗實線＝成品外緣；長虛線 ROUGH_CUT＝粗切留料線；短虛線＝內緣；細點框只裁紙；T＝點固參考母線';
   if (t.mapping?.paperTransform === 'branch-mirror-x') return '粗實線＝魚口金屬切線；細點框只裁紙；斜線區＝貼合舌；內緣虛線供修磨';
   if (t.id === 'main' || t.id === 'main-local') return '孔口實線＝金屬切線；細點框只裁紙；×＝孔口切除；十字只作定位';
@@ -904,16 +905,18 @@ table { width: 100%; border-collapse: collapse; font-size: 2.7mm; } th, td { bor
 export function paperPatternPlan(result, options = {}) {
   assertValidResult(result);
   if ((options.orientation ?? 'auto') === 'auto') {
-    const plans = ['landscape','portrait'].map(orientation => paperPatternPlan(result,{...options,orientation}));
+    const plans = ['landscape','portrait'].map(orientation => paperPatternPlan(result,{...options,orientation,optimizePieces:options.optimizePieces!==false}));
     return plans.sort((a,b)=>a.paperPages-b.paperPages)[0];
   }
   const paper=paperSetup({...options,margin:options.margin??10});
-  // Compact header 14 mm + rulers 16 mm + three legend lines and footer clearance.
-  paper.tileH=paper.contentH-46;
+  // Compact header 14 mm + rulers 16 mm + paper/metal legend and footer clearance.
+  paper.tileH=paper.contentH-50;
   const fabrication=options.fabrication===undefined?null:reconcileFitRecords(options.fabrication,result.params).plan;
   const requested=options.parts??['branch-local'];
   if(!Array.isArray(requested)||!requested.length)throw new Error('請選擇要印的零件。');
-  const ids=[...new Set(requested)];
+  if(requested.some(id=>typeof id!=='string'))throw new Error('紙樣零件代號必須為文字。');
+  const canonical=id=>['branch','branch-local'].includes(id)?'branch-local':['main','main-local'].includes(id)?'main-local':id;
+  const ids=[...new Set(requested.map(canonical))];
   const selected=ids.map(id=>{
     if(['branch','branch-local','branch-rough'].includes(id)){
       const base=createBranchCuttingWrap(result,{datumStep:1,stationCount:12});
@@ -924,19 +927,36 @@ export function paperPatternPlan(result, options = {}) {
       return cleanTemplate(base);
     }
     if(['main','main-local'].includes(id))return cleanTemplate(createMainOpeningPatch(result));
-    if(id==='main-conical'&&result.params.hostType==='cone'){const source=result.templates.find(t=>t.id==='main-conical'||t.id==='main');if(!source)throw new Error('缺少大小頭外壁扇環樣板。');return cleanTemplate(source);}
+    if(id==='main-conical'&&result.params.hostType==='cone'){const source=result.templates.find(t=>t.id==='main-conical'||t.id==='main');if(!source)throw new Error('缺少大小頭外壁扇環樣板。');return cleanTemplate({...source,id:'main-conical'});}
     const source=result.templates.find(t=>t.id===id);
     if(!source||!id.startsWith('pad'))throw new Error('所選紙樣已不在目前模型中。');
     return cleanTemplate(fieldTemplate(source,result));
   });
   const parts=selected.map((template,index)=>{
-    const xs=axisTiles(template.bounds.width+4,paper.tileW,paper.overlap),ys=axisTiles(template.bounds.height+4,paper.tileH,paper.overlap);
-    return {template,prefix:template.id.startsWith('branch')?'B':template.id.startsWith('main')?'M':template.id==='pad'?'P':`P${template.id.split('-')[1]}-`,columns:xs.length,rows:ys.length,pageCount:xs.length*ys.length,
-      tiles:ys.flatMap((y,row)=>xs.map((x,column)=>({row:row+1,column:column+1,x:template.bounds.minX-2+x,y:template.bounds.minY-2+y,width:paper.tileW,height:paper.tileH}))) };
+    const layout=paperPartLayout(template,paper,options.optimizePieces===true);
+    const prefix=ids[index]==='branch-rough'?'BR':ids[index]==='branch-local'?'B':ids[index]==='main-conical'?'MF':ids[index]==='main-local'?'M':ids[index]==='pad'?'P':`P${ids[index].slice(4).toUpperCase().replace(/[^A-Z0-9-]/g,'')||index+1}`;
+    return {template,partID:ids[index],prefix,...layout};
   });
+  if(new Set(parts.map(part=>part.prefix)).size!==parts.length)throw new Error('紙樣零件代號重複，請分開列印。');
   const paperPages=parts.reduce((n,p)=>n+p.pageCount,0),guidePages=options.includeGuide===true?1:0,totalPages=paperPages+guidePages;
   if(totalPages>1000)throw new Error('紙樣超過 1,000 張，請改大紙張或匯出 DXF。');
   return {paper,parts,paperPages,guidePages,totalPages};
+}
+
+/** Print-only proper rotation. The template, geometry, and fabrication mapping
+ * keep their original coordinates. A turned page uses an SVG matrix with
+ * determinant +1; physical dimensions and paper handedness are unchanged. */
+function paperPartLayout(template,paper,allowTurn){
+  const b=template.bounds,padding=2;
+  const candidate=turned=>{
+    const width=(turned?b.height:b.width)+2*padding,height=(turned?b.width:b.height)+2*padding,
+      xs=axisTiles(width,paper.tileW,paper.overlap),ys=axisTiles(height,paper.tileH,paper.overlap);
+    const printTransform=turned?[0,1,-1,0,b.maxY+padding,-b.minX+padding]:[1,0,0,1,0,0];
+    return {printRotation:turned?90:0,printTransform,columns:xs.length,rows:ys.length,pageCount:xs.length*ys.length,
+      tiles:ys.flatMap((y,row)=>xs.map((x,column)=>({row:row+1,column:column+1,x:turned?x:b.minX-padding+x,y:turned?y:b.minY-padding+y,width:paper.tileW,height:paper.tileH})))};
+  };
+  const plain=candidate(false);if(!allowTurn)return plain;
+  const turned=candidate(true);return turned.pageCount<plain.pageCount?turned:plain;
 }
 
 export function paperPositionRecipe(template) {
@@ -953,7 +973,7 @@ export function paperPositionRecipe(template) {
   if(m.positioning?.A&&m.positioning?.B){const {A,B}=m.positioning;return `先找主管基準端與背面 0° 起縫。A：距基準端 ${fmt(A.axial,2)} mm、周向 ${fmt(A.arc,2)} mm；B：距基準端 ${fmt(B.axial,2)} mm、周向 ${fmt(B.arc,2)} mm。由基準端看向另一端，沿逆時針量周向，對準 A／B 十字。`}
   return m.paperAxes==='u-x'&&template.basis?.includes('外表面')?'文字朝外貼在已彎補強板外表面，對準主管軸向與起縫；孔口沿指定板厚法線加工。':'此為平板下料紙樣。對準板材軸向，先切平板再捲彎；成形後核對孔口內外緣。';
 }
-function tileCode(part,tile){return `${part.prefix}${(tile.row-1)*part.columns+tile.column}`;}
+function tileCode(part,tile){return `${part.prefix}${part.partID?.startsWith('pad-')?'-':''}${(tile.row-1)*part.columns+tile.column}`;}
 export function paperTileRegistration(part,tile,setup){
   const {tileW:W,tileH:H,overlap:o}=setup,marks=[];
   for(const side of [-1,1]){
@@ -965,9 +985,10 @@ export function paperTileRegistration(part,tile,setup){
 function compactTileMarkup(part,tile,paper,uid){
   const {tileW:W,tileH:H,contentW,overlap}=paper,t=part.template;
   const marks=paperTileRegistration(part,tile,paper);
-  const registrations=marks.map(({x,y,key})=>`<g data-registration="${key}"><path d="M${fmt(x-2)},${fmt(y)}h4M${fmt(x)},${fmt(y-2)}v4"/><circle cx="${fmt(x)}" cy="${fmt(y)}" r="1.3"/><text x="${fmt(x< W/2?x+2:x-2)}" y="${fmt(y+4.5)}" text-anchor="${x<W/2?'start':'end'}" font-size="2.7" stroke="none" fill="#000">${key}</text></g>`).join('');
+  const registrations=marks.map(({x,y,key})=>`<g data-registration="${xmlText(key)}"><path d="M${fmt(x-2)},${fmt(y)}h4M${fmt(x)},${fmt(y-2)}v4"/><circle cx="${fmt(x)}" cy="${fmt(y)}" r="1.3"/><text x="${fmt(x< W/2?x+2:x-2)}" y="${fmt(y+4.5)}" text-anchor="${x<W/2?'start':'end'}" font-size="2.7" stroke="none" fill="#000">${xmlText(key)}</text></g>`).join('');
   const neighbors=[[-1,0,'左接'],[1,0,'右接'],[0,-1,'上接'],[0,1,'下接']].flatMap(([dc,dr,label])=>{const next=part.tiles.find(t=>t.column===tile.column+dc&&t.row===tile.row+dr);return next?[`${label} ${tileCode(part,next)}`]:[]}).join(' · ')||'單張，不需拼接';
-  return `<svg class="tile-svg" xmlns="http://www.w3.org/2000/svg" width="${contentW}mm" height="${H+16}mm" viewBox="0 0 ${contentW} ${H+16}"><rect width="100%" height="100%" fill="#fff"/><defs><clipPath id="clip-${uid}"><rect width="${W}" height="${H}"/></clipPath></defs><g clip-path="url(#clip-${uid})"><g transform="translate(${fmt(-tile.x,6)},${fmt(-tile.y,6)})" data-scale="1mm-per-svg-unit">${geometryMarkup(t)}</g></g><rect x=".15" y=".15" width="${W-.3}" height="${H-.3}" fill="none" stroke="#000" stroke-width=".2"/><g data-layer="ASSEMBLY_GUIDE" stroke="#000" stroke-width=".18" fill="none">${registrations}</g>${horizontalRuler(4,H+3)}${verticalRuler(W+3,4)}<text x="116" y="${H+7}" font-size="2.8">${xmlText(neighbors)}</text><text x="116" y="${H+12}" font-size="2.6">保留圖形重疊 ${overlap} mm · 對準同號十字</text></svg>`;
+  const matrix=(part.printTransform??[1,0,0,1,0,0]).map(n=>fmt(n,9)).join(' '),neighborLines=svgTextLines(neighbors,contentW-118,2.4);
+  return `<svg class="tile-svg" xmlns="http://www.w3.org/2000/svg" width="${contentW}mm" height="${H+16}mm" viewBox="0 0 ${contentW} ${H+16}"><rect width="100%" height="100%" fill="#fff"/><defs><clipPath id="clip-${uid}"><rect width="${W}" height="${H}"/></clipPath></defs><g clip-path="url(#clip-${uid})"><g transform="translate(${fmt(-tile.x,6)},${fmt(-tile.y,6)})" data-scale="1mm-per-svg-unit"><g data-print-rotation="${part.printRotation??0}" transform="matrix(${matrix})">${geometryMarkup(t)}</g></g></g><rect data-layer="PAPER_TILE_BORDER" x=".15" y=".15" width="${W-.3}" height="${H-.3}" fill="none" stroke="#000" stroke-width=".18" stroke-dasharray="1 1"/><g data-layer="ASSEMBLY_GUIDE" stroke="#000" stroke-width=".18" fill="none">${registrations}</g>${horizontalRuler(4,H+3)}${verticalRuler(W+3,4)}${svgTextBlock(neighborLines,116,H+4,2.4,3.2)}</svg>`;
 }
 function paperPrintDocument(paper,title,pages){
   return `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${xmlText(title)}</title><style>@page{size:${paper.width}mm ${paper.height}mm;margin:0}*{box-sizing:border-box}html,body{margin:0;padding:0;color:#000;font:3mm/1.5 "Microsoft JhengHei",Arial,sans-serif}body{background:#e7e7e7}.page{position:relative;width:${paper.width}mm;height:${paper.height}mm;padding:${paper.margin}mm;margin:6mm auto;background:#fff;break-after:page;page-break-after:always}.page:last-child{break-after:auto;page-break-after:auto}h1{font-size:5mm;line-height:1.2;margin:0 0 2mm}h2{font-size:3.7mm;margin:4mm 0 2mm}p{margin:2mm 0}header{margin-bottom:4mm;border-bottom:.35mm solid;padding-bottom:2mm}.tile-header{height:14mm;margin:0;padding:0;border:0;overflow:hidden}.tile-header h1{font-size:4.5mm;margin:0 0 1mm}.tile-header p{font-size:2.8mm;line-height:1.3;margin:0}.tile-svg{display:block;max-width:none}.tile-legend{font-size:2.7mm;margin:1mm 0;line-height:1.25}.guide-layout{display:grid;grid-template-columns:122mm 1fr;gap:6mm;align-items:start}.guide-layout svg{display:block}.guide-steps{margin:0;padding-left:5mm;font-size:3.1mm}.guide-steps li{margin-bottom:3mm}.calibration-box{border:.3mm solid;padding:3mm}.page-map{display:grid;gap:1mm;margin:2mm 0}.page-map span{border:.25mm solid;padding:1mm;text-align:center;font-size:3mm}.recipe{border:.3mm solid;padding:3mm;margin-top:4mm;font-size:3.2mm}.small{font-size:2.7mm}footer{position:absolute;left:${paper.margin}mm;right:${paper.margin}mm;bottom:5mm;border-top:.2mm solid;padding-top:1mm;font-size:2.5mm}footer span{float:right}.print-controls{position:sticky;top:0;z-index:2;text-align:center;background:white;padding:12px;font-size:14px;border-bottom:1px solid}.print-controls button{padding:8px 16px;margin-right:8px;cursor:pointer}@media print{body{background:#fff}.page{margin:0}.print-controls{display:none}*{print-color-adjust:exact;-webkit-print-color-adjust:exact}}</style></head><body><nav class="print-controls"><button onclick="window.print()">列印／儲存 PDF</button><span>${paper.paper} ${paper.orientation==='landscape'?'橫式':'直式'} · 實際尺寸 100% · 關閉頁首頁尾</span></nav>${pages.map((body,i)=>`<section class="page" data-page="${i+1}">${body}${footer(title,i+1,pages.length)}</section>`).join('\n')}</body></html>`;
@@ -975,10 +996,10 @@ function paperPrintDocument(paper,title,pages){
 export function buildPaperPatternHTML(result,meta={},options={}){
   const plan=paperPatternPlan(result,options),p=plan.paper,id=String(meta.id??'未編號'),rev=String(meta.revision??'1'),pages=[];
   if(plan.guidePages){
-    const maps=plan.parts.map(part=>`<div><strong>${xmlText(part.template.id.startsWith('branch')?'支管':part.template.id.startsWith('main')?'主管':part.template.title)}</strong>：${part.rows} 列 × ${part.columns} 欄，共 ${part.pageCount} 張${plan.parts.length===1&&part.rows<=3&&part.columns<=6?`<div class="page-map" style="grid-template-columns:repeat(${part.columns},1fr)">${part.tiles.map(tile=>`<span>${tileCode(part,tile)}</span>`).join('')}</div>`:''}</div>`).join('');
+    const maps=plan.parts.map(part=>`<div><strong>${xmlText(part.prefix+' · '+part.template.title)}</strong>：${part.rows} 列 × ${part.columns} 欄，共 ${part.pageCount} 張${plan.parts.length===1&&part.rows<=3&&part.columns<=6?`<div class="page-map" style="grid-template-columns:repeat(${part.columns},1fr)">${part.tiles.map(tile=>`<span>${xmlText(tileCode(part,tile))}</span>`).join('')}</div>`:''}</div>`).join('');
     pages.push(`<header><h1>先量 100 mm，再拼接貼管</h1><p>接頭 ${xmlText(id)} · 版次 ${xmlText(rev)} · 主管 Ø${fmt(result.params.mainOD)}／支管 Ø${fmt(result.params.branchOD)} mm · ${fmt(result.params.angle)}° · ${xmlText(ENUM_LABELS[result.params.jointType])}</p></header><div class="guide-layout"><div><div class="calibration-box"><strong>水平、垂直都要量到 100 mm</strong><svg xmlns="http://www.w3.org/2000/svg" width="114mm" height="116mm" viewBox="0 0 114 116">${horizontalRuler(4,4)}${verticalRuler(106,8)}<text x="8" y="40" font-size="4">實際尺寸／100%</text><text x="8" y="50" font-size="3.2">關閉「符合頁面」</text><text x="8" y="60" font-size="3.2">關閉瀏覽器頁首與頁尾</text><text x="8" y="88" font-size="3">此頁可不貼管；紙樣另頁。</text></svg></div><p class="small">拼接順序示意（非 1:1）</p>${maps}</div><div><ol class="guide-steps"><li><strong>量校正尺</strong><br>兩方向都正確，才用紙樣。</li><li><strong>只裁白邊</strong><br>保留圖形重疊區 ${p.overlap} mm。</li><li><strong>對同號圈十字</strong><br>重疊後黏好，保持線條連續。</li><li><strong>對基準，再包管</strong><br>先描線、試配與修磨。</li></ol><div class="recipe">${plan.parts.map(part=>`<p><strong>${xmlText(part.template.id.startsWith('branch')?'支管':part.template.id.startsWith('main')?'主管':part.template.title)}：</strong>${xmlText(paperPositionRecipe(part.template))}</p>`).join('')}</div></div></div>`);
   }
-  for(const part of plan.parts)for(const tile of part.tiles){const code=tileCode(part,tile);pages.push(`<header class="tile-header"><h1>${code}　${xmlText(part.template.title)}　1:1</h1><p>接頭 ${xmlText(id)} · 版次 ${xmlText(rev)} · ${part.pageCount} 張中第 ${(tile.row-1)*part.columns+tile.column} 張 · ${part.rows} 列 × ${part.columns} 欄</p></header>${compactTileMarkup(part,tile,p,`paper-${pages.length+1}`)}<p class="tile-legend">${xmlText(templateLegend(part.template))}<br>只裁白邊，保留重疊圖形；文字面朝外。先核對兩方向 100 mm 校正尺。</p>`);}
+  for(const part of plan.parts)for(const tile of part.tiles){const code=tileCode(part,tile),turned=part.printRotation===90?' · 圖形為省紙轉 90°，拼好後按定位環／箭頭貼管':'';pages.push(`<header class="tile-header"><h1>${xmlText(code)}　${xmlText(part.template.title)}　1:1</h1><p>接頭 ${xmlText(id)} · 版次 ${xmlText(rev)} · ${part.pageCount} 張中第 ${(tile.row-1)*part.columns+tile.column} 張 · ${part.rows} 列 × ${part.columns} 欄</p></header>${compactTileMarkup(part,tile,p,`paper-${pages.length+1}`)}<p class="tile-legend">${xmlText(templateLegend(part.template))}<br>沿細點頁框裁外白邊；同號十字疊合，保留 ${p.overlap} mm 圖形重疊。文字面朝外${xmlText(turned)}。</p>`);}
   return paperPrintDocument(p,`${id} · 1:1 貼管紙樣`,pages);
 }
 

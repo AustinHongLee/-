@@ -297,6 +297,8 @@ function validate(raw) {
   if(p.angle<5||p.angle>175)error('angle','支援夾角為 5° 至 175°。');
   for(const f of ['projection','rootGap','holeGap','padClearance'])if(p[f]<0)error(f,'間隙與伸入長度不可小於 0。');
   if(!['on','in'].includes(p.jointType))error('jointType','接頭型式須為外貼 on 或內插 in。');
+  if(p.motherOpening!==undefined&&typeof p.motherOpening!=='boolean')error('motherOpening','母管開孔設定須為布林值。');
+  if(p.motherOpening===false)error('motherOpening','直管母材封閉外焊尚未支援；請選開孔接法，或使用彎頭／大小管的外焊支撐。');
   if(!['circle','ellipse','obround','rounded'].includes(p.padShape))error('padShape','補強板外形無效。');
   if(!['single','axial','circumferential'].includes(p.padSplit))error('padSplit','補強板分片方式無效。');
   if(!['neutral','formed-normal'].includes(p.padManufacturing))error('padManufacturing','補強板工法須為 neutral 或 formed-normal。');

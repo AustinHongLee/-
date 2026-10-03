@@ -9,7 +9,8 @@
  */
 import {torusSurfacePoint,torusCoordinates,torusLineIntersections,elbowFrame} from './elbow-geometry.js';
 
-const TAU=2*Math.PI,EPS=1e-9;
+const TAU=2*Math.PI,EPS=1e-9,PAD_SAMPLE_CAP=4096,PAD_BOUNDARY_CAP=16384,GUARD=1.1;
+const FRACTIONS=Array.from({length:7},(_,i)=>(i+1)/8);
 const add=(a,b)=>a.map((v,i)=>v+b[i]),sub=(a,b)=>a.map((v,i)=>v-b[i]);
 const mul=(a,k)=>a.map(v=>v*k),dot=(a,b)=>a.reduce((s,v,i)=>s+v*b[i],0);
 const norm=v=>Math.hypot(...v),close=p=>[...p,[...p[0]]];
@@ -46,10 +47,21 @@ function certifyBoundary(parameters,context,tool){
   return clearance;
 }
 
-function densifyBoundary(points,maxLength=2){
+/** A straight beta/phi segment maps to a smooth torus curve. The global
+ * bound on its second derivative gives a conservative entire-segment chord
+ * error bound M/8; this certificate concerns the marking polygon only.
+ */
+export function formedElbowPadBoundaryChordBound(a,b,context){
+  const db=Math.abs(b[0]-a[0]),dp=Math.abs(b[1]-a[1]),Ro=context.outerRadius;
+  return ((context.bendRadius+Ro)*db*db+2*Ro*db*dp+Ro*dp*dp)/8;
+}
+function densifyBoundary(points,{chartX,chartY,context,tolerance},maxLength=2){
   const result=[points[0]];
   for(let i=0;i<points.length-1;i++){
-    const a=points[i],b=points[i+1],steps=Math.max(1,Math.ceil(norm(sub(b,a))/maxLength));
+    const a=points[i],b=points[i+1],pa=[a[0]/chartX,a[1]/chartY],pb=[b[0]/chartX,b[1]/chartY];
+    const bound=formedElbowPadBoundaryChordBound(pa,pb,context);
+    const steps=Math.max(1,Math.ceil(norm(sub(b,a))/maxLength),Math.ceil(Math.sqrt(bound/(tolerance/GUARD))));
+    if(result.length+steps>PAD_BOUNDARY_CAP)throw new RangeError('成形補強板外緣已達 16384 點上限仍無法符合曲面弦差容差；請放寬數值輪廓誤差。');
     for(let k=1;k<=steps;k++)result.push(lerp(a,b,k/steps));
   }
   return result;
@@ -97,7 +109,7 @@ function makeModel(joint,p){
   const tool=joint.params.branchOD/2+p.padClearance,phi0=e.surfaceClock,chartX=Rc+R,chartY=R;
   const normalDot=dot(a.hostNormal,a.branchDirection),anchor=new Map(),cache=new Map();
   const finite=q=>q.beta>=-1e-8&&q.beta<=e.bendAngle+1e-8;
-  const root=(radius,theta)=>{
+  const root=(radius,theta,cacheResult=true)=>{
     const key=`${radius}/${theta.toFixed(13)}`;if(cache.has(key))return cache.get(key);
     if(!anchor.has(radius)){
       const roots=torusLineIntersections(a.branchOrigin,a.branchDirection,Rc,radius).filter(q=>q.normalDotDirection>1e-7);
@@ -110,7 +122,7 @@ function makeModel(joint,p){
     if(!candidates.length||!finite(candidates[0]))throw new Error('補強板穿厚孔跨出有限彎頭端部或成為相切開放交線。');
     const q=candidates[0],parameter=[q.beta,unwrap(q.phi,phi0)],result={...q,parameter,chart:[chartX*parameter[0],chartY*parameter[1]],radius};
     if(q.t>=joint.geometry.branch.axisEnd-1e-7)throw new Error('補強板外面孔口超過支管自由端；請降低板厚或加長支管。');
-    cache.set(key,result);return result;
+    if(cacheResult)cache.set(key,result);return result;
   };
   return {context,R,Ro,Rc,tool,phi0,chartX,chartY,root};
 }
@@ -141,8 +153,9 @@ export function computeFormedElbowPad(joint,options={}){
   if(e.bendRadius<=e.outerRadius+p.padThickness)error('padThickness','彎曲中心半徑須大於含板厚的外半徑，避免內彎自交。');
   if(errors.length)return fail();
   const model=makeModel(joint,p),{context,R,Ro,Rc,tool,chartX,chartY,root}=model;
-  const n=Math.max(128,Math.min(1024,joint.params.samples??360)),levels=9,loops=[];
+  const n=Math.max(128,Math.min(PAD_SAMPLE_CAP,joint.params.samples??360)),levels=9,loops=[];
   let maximumResidual=0,minimumNormalDot=1,minimumBranchFreeEnd=Infinity;
+  let sampledBoreChordError=0,boundaryChordBound=0;
   try{
     for(let layer=0;layer<levels;layer++){
       const radius=R+p.padThickness*layer/(levels-1),loop=[];
@@ -151,13 +164,24 @@ export function computeFormedElbowPad(joint,options={}){
         minimumNormalDot=Math.min(minimumNormalDot,q.normalDotDirection);minimumBranchFreeEnd=Math.min(minimumBranchFreeEnd,joint.geometry.branch.axisEnd-q.t);
         loop.push(q);
       }
-      loops.push([...loop,loop[0]]);
+      const closedLoop=[...loop,loop[0]];
+      // Only the two visible manufacturing face contours are discretized.
+      // Intermediate plate layers are bore-topology probes, not a whole-
+      // thickness global chord or interference theorem. Avoid caching probes.
+      if(layer===0||layer===levels-1)for(let i=0;i<n;i++)for(const fraction of FRACTIONS){
+        const q=root(radius,TAU*(i+fraction)/n,false),a=closedLoop[i],b=closedLoop[i+1];
+        sampledBoreChordError=Math.max(sampledBoreChordError,norm(sub(q.point,lerp(a.point,b.point,fraction))),norm(sub(q.chart,lerp(a.chart,b.chart,fraction))));
+        maximumResidual=Math.max(maximumResidual,Math.abs(q.residual));
+        minimumNormalDot=Math.min(minimumNormalDot,q.normalDotDirection);
+        minimumBranchFreeEnd=Math.min(minimumBranchFreeEnd,joint.geometry.branch.axisEnd-q.t);
+      }
+      loops.push(closedLoop);
     }
   }catch(cause){error('padGeometry',cause.message);return fail();}
   const chartPoints=loops.flatMap(loop=>loop.map(q=>q.chart));
   let outer,outerParameter,certificate=-Infinity,shape,extra=0;
-  for(let iteration=0;iteration<30;iteration++){
-    shape=shapeBoundary(p.padShape,chartPoints,p.padMargin,n,extra);outer=densifyBoundary(shape.points);
+  try{for(let iteration=0;iteration<30;iteration++){
+    shape=shapeBoundary(p.padShape,chartPoints,p.padMargin,n,extra);outer=densifyBoundary(shape.points,{chartX,chartY,context,tolerance:joint.params.tolerance});
     outerParameter=outer.map(([x,y])=>[x/chartX,y/chartY]);
     const betaMin=Math.min(...outerParameter.map(q=>q[0])),betaMax=Math.max(...outerParameter.map(q=>q[0]));
     const phiSpan=Math.max(...outerParameter.map(q=>q[1]))-Math.min(...outerParameter.map(q=>q[1]));
@@ -167,8 +191,10 @@ export function computeFormedElbowPad(joint,options={}){
     const enclosed=chartPoints.every(q=>pointInPolygon(q,outer));
     if(certificate>=p.padMargin-1e-8&&enclosed)break;
     extra+=Math.max(1,p.padMargin-certificate)*1.15;
-  }
+  }}catch(cause){error('tolerance',cause.message);return fail();}
   if(certificate<p.padMargin-1e-8){error('padMargin','無法證明完整板厚外緣的最低留邊，請調整板形與接頭方向。');return fail();}
+  for(let i=0;i<outerParameter.length-1;i++)boundaryChordBound=Math.max(boundaryChordBound,formedElbowPadBoundaryChordBound(outerParameter[i],outerParameter[i+1],context));
+  const guardedChord=Math.max(sampledBoreChordError*GUARD,boundaryChordBound*GUARD);
   const inner=loops[0],outerHole=loops.at(-1),map=radius=>outerParameter.map(([beta,phi])=>torusSurfacePoint(beta,phi,Rc,radius));
   const holeUV=(loop,radius)=>loop.map(q=>[Rc*q.parameter[0],radius*q.parameter[1]]);
   const splitAxis=p.padSplit==='axial'?1:0,splitCoordinate=shape.center[splitAxis]/(splitAxis?chartY:chartX);
@@ -219,6 +245,7 @@ export function computeFormedElbowPad(joint,options={}){
       rearDistance:(Rc+Ro)*beta,circumference:Ro*wrap(phi),point:torusSurfacePoint(beta,phi,Rc,Ro),
       innerPoint:torusSurfacePoint(beta,phi,Rc,R),motherRearDistance:(Rc+R)*beta};});
   const verification=[{id:'formed-pad-bore-equations',label:'成形補強板內外面孔口方程殘差',value:maximumResidual,unit:'mm',tolerance:joint.params.tolerance,status:maximumResidual<=joint.params.tolerance?'pass':'fail'},
+    {id:'formed-pad-chord',label:'成形補強板孔口採樣與曲面外緣弦差（含數值餘量）',value:guardedChord,unit:'mm',tolerance:joint.params.tolerance,status:guardedChord<=joint.params.tolerance?'pass':'warning',basis:'face-bore-interior-probes-and-marking-segment-second-derivative-bound'},
     {id:'formed-pad-whole-thickness-margin',label:'補強板連續板厚外緣最低留邊下界',value:certificate,unit:'mm',tolerance:p.padMargin,status:'pass',basis:pad.boundaryCertification.method},
     {id:'formed-pad-free-end',label:'板外孔口至支管自由端餘裕（採樣）',value:minimumBranchFreeEnd,unit:'mm',tolerance:0,status:'pass'},
     {id:'formed-pad-layer-checks',label:'成形板近側孔口層與站點探查',value:levels*n,unit:'samples',tolerance:0,status:'pass',basis:'finite-probes-not-global-proof'}];
@@ -230,6 +257,8 @@ export function computeFormedElbowPad(joint,options={}){
       '未驗證補強面積、板厚選型、支撐承載、焊縫強度或壓力管規範。'],
     capabilities:{formedPad:true,flatDevelopment:false,oneToOnePaperTemplate:false,structuralDesign:false,
       continuousThicknessBoundaryMargin:true,globalBoreTopologyProof:false,splitLocator:p.padSplit!=='single'},
+    sampling:{sampledMaxChordError:Math.max(sampledBoreChordError,boundaryChordBound),guardFactor:GUARD,
+      sampledBoreChordError,boundaryChordBound,boreSamples:n,outerBoundaryPoints:outerParameter.length},
     validation:{minimumNormalDot,nearBoreLayers:levels,nearBoreSamples:n,boundaryClearanceRigorous:true,globalTopologyRigorous:false}};
 }
 
