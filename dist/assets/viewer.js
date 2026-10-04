@@ -4,6 +4,9 @@ import { cylindricalUVToWorld, rotateAroundMain } from './geometry.js';
 import { torusSurfacePoint, elbowFrame } from './elbow-geometry.js';
 import { conicalSurfacePoint,conicalCoordinates } from './conical-geometry.js';
 
+import {jointViewCandidates} from './model-view.js';
+import {positioningFrame} from './model-positioning.js';
+
 const TAU = Math.PI * 2;
 const open = p => p.slice(0, -1);
 const path = points => new THREE.Path(points.map(p => new THREE.Vector2(...p)));
@@ -84,7 +87,7 @@ function loft(a,b) {
 
 export class JointViewer {
   constructor(container) {
-    this.container=container; this.parts={}; this.view='iso'; this.result=null;
+    this.container=container; this.parts={}; this.view='joint'; this.result=null;
     this.flags={explode:false,transparent:false,section:false};
     try {
       this.renderer=new THREE.WebGLRenderer({antialias:true,alpha:true,preserveDrawingBuffer:true});
@@ -146,7 +149,7 @@ export class JointViewer {
     const mainMat=this.material(0x8195ab),branchMat=this.material(0x55b9df),padMat=this.material(0xdba05b);
     if(p.hostType==='elbow') {
       const e=result.geometry.elbow;
-      for(const[r,hole,inward]of[[e.outerRadius,e.outerHoleUV,false],[e.innerRadius,e.innerHoleUV,true]])this.mesh(elbowSurface(e,r,hole,inward),mainMat.clone(),this.parts.main);
+      for(const[r,hole,inward]of[[e.outerRadius,e.outerHoleUV,false],[e.innerRadius,e.innerHoleUV,true]])this.mesh(elbowSurface(e,r,hole,inward),mainMat.clone(),this.parts.main).userData.pickSurface=inward?'mother-inner':'mother-outer';
       if(e.motherOpening!==false)this.mesh(loft(e.outerHole3D,e.innerHole3D),mainMat.clone(),this.parts.main);
       const ring=(beta,r)=>Array.from({length:97},(_,i)=>torusSurfacePoint(beta,TAU*i/96,e.bendRadius,r));
       for(const beta of[0,e.bendAngle]){this.mesh(loft(ring(beta,e.outerRadius),ring(beta,e.innerRadius)),mainMat.clone(),this.parts.main);this.line(ring(beta,e.outerRadius),0xa7bbd0,this.parts.main);}
@@ -158,7 +161,7 @@ export class JointViewer {
       this.label('B 端',end.center.map((v,i)=>v+end.tangent[i]*labelSize*1.5),this.parts.main,labelSize);
     } else if(p.hostType==='cone'){
       const c=result.geometry.conical;
-      for(const[offset,hole,inward]of[[0,c.outerHole3D,false],[-p.mainWall,c.innerHole3D,true]])this.mesh(conicalSurface(c,p,offset,hole,inward),mainMat.clone(),this.parts.main);
+      for(const[offset,hole,inward]of[[0,c.outerHole3D,false],[-p.mainWall,c.innerHole3D,true]])this.mesh(conicalSurface(c,p,offset,hole,inward),mainMat.clone(),this.parts.main).userData.pickSurface=inward?'mother-inner':'mother-outer';
       if(c.motherOpening!==false)this.mesh(loft(c.outerHole3D,c.innerHole3D),mainMat.clone(),this.parts.main);
       const ring=(x,offset)=>Array.from({length:97},(_,i)=>conicalSurfacePoint(x,TAU*i/96,p,offset));
       for(const x of[0,c.length]){this.mesh(loft(ring(x,0),ring(x,-p.mainWall)),mainMat.clone(),this.parts.main);this.line(ring(x,0),0xa7bbd0,this.parts.main);}
@@ -169,7 +172,7 @@ export class JointViewer {
     const ring=(x,r)=>Array.from({length:97},(_,i)=>cylindricalUVToWorld([x,r*(-Math.PI+TAU*i/96)],r,p.azimuth));
     for(const [r,hole,inward] of [[m.outerRadius,m.outerHoleUV,false],[m.innerRadius,m.innerHoleUV,true]]) {
       const outer=[[0,-Math.PI*r],[m.length,-Math.PI*r],[m.length,Math.PI*r],[0,Math.PI*r],[0,-Math.PI*r]];
-      this.mesh(surface(outer,[hole],r,p.azimuth,inward),mainMat.clone(),this.parts.main);
+      this.mesh(surface(outer,[hole],r,p.azimuth,inward),mainMat.clone(),this.parts.main).userData.pickSurface=inward?'mother-inner':'mother-outer';
     }
     this.mesh(loft(m.outerHole3D,m.innerHole3D),mainMat.clone(),this.parts.main);
     for(const x of [0,m.length]) {
@@ -232,24 +235,38 @@ export class JointViewer {
     if(!this.available||!this.result?.valid&&!this.editor?.host)return;
     this.resize();
     this.view=view;
-    const fitModel=this.result?.valid?this.model:this.editor.group;
+    const displayingProxy=this.editor?.host&&!this.model.visible;
+    const fitModel=displayingProxy?this.editor.group:this.result?.valid?this.model:this.editor.group;
     fitModel.updateMatrixWorld(true);const box=new THREE.Box3();
     fitModel.traverse(object=>{if(!object.isMesh||!object.visible)return;object.geometry.computeBoundingBox();box.union(object.geometry.boundingBox.clone().applyMatrix4(object.matrixWorld));});
     if(box.isEmpty())return;const center=box.getCenter(new THREE.Vector3());
+    const params=displayingProxy?{...this.editor.params,...this.editor.draft}:this.result?.params??this.editor.params,frame=view==='joint'?positioningFrame(params):null;
+    let candidates=frame?jointViewCandidates(params):null;
+    if(candidates){
+      const radius=Math.max(params.mainOD,params.branchOD),origin=new THREE.Vector3(...frame.origin),tip=this.editor?.tip??frame.origin.map((v,i)=>v+frame.direction[i]*params.branchLength);
+      center.copy(origin).lerp(new THREE.Vector3(...tip),.28);
+      // Contact-oriented views also account for an elbow's other arm.
+      this.editor?.group?.updateMatrixWorld(true);
+      const host=this.editor?.host;
+      if(host)candidates=candidates.slice().sort((a,b)=>{const visible=c=>{const eye=origin.clone().addScaledVector(new THREE.Vector3(...c.direction),Math.max(box.getSize(new THREE.Vector3()).length()*3,radius*4)),ray=new THREE.Raycaster(eye,origin.clone().sub(eye).normalize()),hit=ray.intersectObject(host,false)[0];return !hit||eye.distanceTo(origin)-hit.distance<params.mainOD*.02;};return Number(visible(b))-Number(visible(a))||b.score-a.score;});
+    }
     const elbowPlan=(this.result?.params??this.editor.params).hostType==='elbow'&&view==='front';
-    this.camera.up.set(0,elbowPlan?1:0,elbowPlan?0:1);
-    const dir=elbowPlan?new THREE.Vector3(0,0,1):view==='front'?new THREE.Vector3(0,-1,.04):view==='side'?new THREE.Vector3(1,0,.04):new THREE.Vector3(1,-1.5,1.1).normalize();
+    if(candidates)this.camera.up.set(...candidates[0].up);else this.camera.up.set(0,elbowPlan?1:0,elbowPlan?0:1);
+    const dir=candidates?new THREE.Vector3(...candidates[0].direction):elbowPlan?new THREE.Vector3(0,0,1):view==='front'?new THREE.Vector3(0,-1,.04):view==='side'?new THREE.Vector3(1,0,.04):new THREE.Vector3(1,-1.5,1.1).normalize();
     this.camera.position.copy(center).add(dir);this.camera.lookAt(center);this.camera.updateMatrixWorld();
     const inverse=this.camera.matrixWorldInverse, projected=[];
     fitModel.updateMatrixWorld(true);
     fitModel.traverse(object=>{
       const attr=object.geometry?.getAttribute('position');if(!object.isMesh||!object.visible||!attr)return;
-      for(let i=0;i<attr.count;i++)projected.push(new THREE.Vector3().fromBufferAttribute(attr,i).applyMatrix4(object.matrixWorld).applyMatrix4(inverse));
+      const mother=object===this.editor?.host||object.parent===this.parts.main||this.parts.main&&(()=>{let p=object;while(p&&p!==this.parts.main)p=p.parent;return !!p;})();
+      for(let i=0;i<attr.count;i++){const point=new THREE.Vector3().fromBufferAttribute(attr,i).applyMatrix4(object.matrixWorld);if(candidates&&mother&&point.distanceTo(new THREE.Vector3(...frame.origin))>params.mainOD*.7)continue;projected.push(point.applyMatrix4(inverse));}
     });
+    if(candidates)for(const t of [-.55,.55])for(const s of [-.4,.4])for(const n of [-.15,.15])projected.push(new THREE.Vector3(...frame.origin.map((v,i)=>v+params.mainOD*(t*frame.tangent[i]+s*frame.side[i]+n*frame.normal[i]))).applyMatrix4(inverse));
     const extent=axis=>{let low=Infinity,high=-Infinity;for(const point of projected){low=Math.min(low,point[axis]);high=Math.max(high,point[axis]);}return high-low;};
     const depth=extent('z')/2, halfAngle=Math.tan(THREE.MathUtils.degToRad(this.camera.fov/2));
-    const distance=(Math.max(extent('y'),extent('x')/this.camera.aspect)/2/halfAngle+depth)*1.12;
-    this.controls.target.copy(center);this.camera.position.copy(center).addScaledVector(dir,distance);this.camera.near=Math.max(.1,distance/10000);this.camera.far=distance*20;
+    const screenRadius=candidates?projected.reduce((r,p)=>Math.max(r,Math.abs(p.y),Math.abs(p.x)/this.camera.aspect),0):Math.max(extent('y'),extent('x')/this.camera.aspect)/2;
+    const distance=(screenRadius/halfAngle+depth)*1.12;
+    this.controls.target.copy(center);this.camera.position.copy(center).addScaledVector(dir,distance);this.camera.near=Math.max(.1,distance/10000);this.camera.far=Math.max(distance,box.getSize(new THREE.Vector3()).length())*20;
     this.camera.updateProjectionMatrix();this.controls.update();this.render();
   }
   highlight(index) {
