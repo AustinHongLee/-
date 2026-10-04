@@ -44,13 +44,13 @@ let timer,toastTimer,pending=false,previewHTML='',previewSuffix='列印檔.html'
 let lastValid=null,favorites=[],history=[];
 const viewer=new JointViewer($('viewer'));
 const modelEditor=new ModelEditor(viewer,{getParams:()=>state.params,onCommit:commitModelPatch,onAlign:end=>applyVisual({field:'elbowAlignment',value:end.toLowerCase()+'-axis'}),onPreview:text=>{$('model-edit-state').textContent=text||modelEditReadback();},onKeyboard:modelHandleKeyboard,onSelect:part=>{state.settingPanel=part==='pad'?2:1;setParameterOpen(true);renderForm();showWorkspace('model');notify(part==='pad'?'正在修改金色補強板。':'正在修改藍色支管的接法。');}});
-function modelEditReadback(){const p=state.params;if(!modelEditor.enabled)return '查看模式';if(pending)return '重算魚口中…';if(p.hostType==='elbow'&&p.elbowAlignment!=='free')return `沿 ${p.elbowAlignment==='a-axis'?'A':'B'} 端中心線鎖定`;return state.result&&!state.result.valid?'目前位置不可製作；可點管身移回':`支管角度 ${fmt(p.angle,1)}°`;}
+function modelEditReadback(){const p=state.params;if(!modelEditor.enabled)return '查看模式';if(pending)return '快速預覽 · 精算中，仍可定位';if(p.hostType==='elbow'&&p.elbowAlignment!=='free')return `沿 ${p.elbowAlignment==='a-axis'?'A':'B'} 端中心線鎖定`;return state.result&&!state.result.valid?'目前位置不可製作；可點管身移回':`支管角度 ${fmt(p.angle,1)}°`;}
 function syncModelControls(){
   const locked=modelEditor.locked;
   $('direct-edit-toggle').setAttribute('aria-pressed',String(modelEditor.enabled));$('direct-edit-toggle').textContent=modelEditor.enabled?'定位操作':'切回定位';
   $('model-free').hidden=!locked||!modelEditor.enabled;$('model-normal').hidden=locked||!modelEditor.enabled;$('model-edit-state').textContent=modelEditReadback();
   $('model-issue').hidden=pending||!state.result||state.result.valid;$('model-issue').textContent=state.result?.errors?.[0]?.message??'';
-  $('model-free').disabled=pending;$('model-normal').disabled=pending;syncModelDimensions();
+  $('model-free').disabled=modelEditor.busy;$('model-normal').disabled=modelEditor.busy||!positioningFrame(state.params);syncModelDimensions();
   $('model-operation-note').textContent=!viewer.available?'3D 未啟用，請用側邊精確定位欄位。':!modelEditor.enabled?'拖曳轉視角；點「切回定位」修改位置。':locked?'點 A／B 管口改同軸；自由定位解除鎖定。點藍色支管改接法、點金色板改補強。':(state.params.hostType??'straight')==='straight'?'點灰管移接點或換側 · 拉藍端調軸向斜度 · 點支管改接法 · 拖背景轉視角':'點灰管移接點 · 拉藍端改方向 · 點支管改接法、點金板改補強 · 拖背景轉視角';
 }
 function commitModelPatch(patch){state.params={...state.params,...patch};syncInputSetup({positionMode:'custom',bendPositionMode:'custom'});renderForm();modelEditor.sync(state.params,{valid:false});compute();syncModelControls();}

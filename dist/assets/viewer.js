@@ -6,20 +6,25 @@ import { conicalSurfacePoint,conicalCoordinates } from './conical-geometry.js';
 
 import {jointViewCandidates} from './model-view.js';
 import {positioningFrame} from './model-positioning.js';
+import {forEachUVTriangle} from './display-tessellation.js';
 
 const TAU = Math.PI * 2;
 const open = p => p.slice(0, -1);
 const path = points => new THREE.Path(points.map(p => new THREE.Vector2(...p)));
 
+// Display-only tessellation keeps all boundary points. Fixed angular strips
+// avoid recursively exploding the long triangles joining a small hole to a pipe.
+function curvedSurface(shape,xStep,yStep,map,inward=false){
+  const flat=new THREE.ShapeGeometry(shape),attr=flat.getAttribute('position'),points=Array.from({length:attr.count},(_,i)=>[attr.getX(i),attr.getY(i)]),indices=flat.index?.array??Array.from({length:attr.count},(_,i)=>i),positions=[],normals=[];
+  forEachUVTriangle(points,indices,{xStep,yStep},(a,b,c)=>{for(const q of[a,b,c]){const {point,normal}=map(q);positions.push(...point);normals.push(...normal.map(v=>inward?-v:v));}});
+  flat.dispose();const geo=new THREE.BufferGeometry();geo.setAttribute('position',new THREE.Float32BufferAttribute(positions,3));geo.setAttribute('normal',new THREE.Float32BufferAttribute(normals,3));return geo;
+}
+
 function conicalSurface(c,p,offset,hole,inward=false){
   const center=(p.surfaceClock??0)*Math.PI/180,lo=center-Math.PI,hi=center+Math.PI,scale=Math.max(...c.outerRadii);
   const outer=[[0,scale*lo],[c.length,scale*lo],[c.length,scale*hi],[0,scale*hi],[0,scale*lo]],shape=new THREE.Shape(open(outer).map(q=>new THREE.Vector2(...q)));
   if(hole?.length)shape.holes=[path(open(hole).map(q=>[q[0],scale*(center+Math.atan2(Math.sin(Math.atan2(q[1],q[2])-center),Math.cos(Math.atan2(q[1],q[2])-center)))]))];
-  const flat=new THREE.ShapeGeometry(shape),attr=flat.getAttribute('position'),indices=flat.index?.array??Array.from({length:attr.count},(_,i)=>i),positions=[],normals=[];
-  const add=(a,b,d,depth=0)=>{const pairs=[[a,b,d],[b,d,a],[d,a,b]],size=e=>Math.abs(e[0][1]-e[1][1])/scale,worst=pairs.reduce((best,e)=>size(e)>size(best)?e:best);
-    if(size(worst)>Math.PI/36&&depth<17){const[u,v,w]=worst,mid=u.map((x,i)=>(x+v[i])/2);add(u,mid,w,depth+1);add(mid,v,w,depth+1);return;}
-    for(const[x,u]of[a,b,d]){const q=conicalSurfacePoint(x,u/scale,p,offset),normal=conicalCoordinates(q,p,offset).normal;positions.push(...q);normals.push(...normal.map(v=>inward?-v:v));}};
-  for(let i=0;i<indices.length;i+=3)add(...Array.from(indices.slice(i,i+3),j=>[attr.getX(j),attr.getY(j)]));flat.dispose();const geo=new THREE.BufferGeometry();geo.setAttribute('position',new THREE.Float32BufferAttribute(positions,3));geo.setAttribute('normal',new THREE.Float32BufferAttribute(normals,3));return geo;
+  return curvedSurface(shape,Infinity,scale*Math.PI/36,([x,u])=>{const point=conicalSurfacePoint(x,u/scale,p,offset);return {point,normal:conicalCoordinates(point,p,offset).normal};},inward);
 }
 
 function elbowSurface(e,r,hole,inward=false) {
@@ -27,54 +32,18 @@ function elbowSurface(e,r,hole,inward=false) {
   const outer=[[0,r*lo],[R*e.bendAngle,r*lo],[R*e.bendAngle,r*hi],[0,r*hi],[0,r*lo]];
   const shape=new THREE.Shape(open(outer).map(p=>new THREE.Vector2(...p)));
   shape.holes=hole?.length?[path(open(hole))]:[];
-  const flat=new THREE.ShapeGeometry(shape),attr=flat.getAttribute('position');
-  const indices=flat.index?.array??Array.from({length:attr.count},(_,i)=>i),positions=[],normals=[];
-  const add=(a,b,c,depth=0)=>{
-    const pairs=[[a,b,c],[b,c,a],[c,a,b]],size=p=>Math.max(Math.abs(p[0][0]-p[1][0])/R,Math.abs(p[0][1]-p[1][1])/r);
-    const worst=pairs.reduce((best,p)=>size(p)>size(best)?p:best);
-    if(size(worst)>Math.PI/36&&depth<17){const[u,v,w]=worst,mid=u.map((x,i)=>(x+v[i])/2);add(u,mid,w,depth+1);add(mid,v,w,depth+1);return;}
-    for(const [s,u]of[a,b,c]){const beta=s/R,angle=u/r,f=elbowFrame(beta,R);positions.push(...torusSurfacePoint(beta,angle,R,r));normals.push(...f.normal.map((v,i)=>(v*Math.cos(angle)+f.binormal[i]*Math.sin(angle))*(inward?-1:1)));}
-  };
-  for(let i=0;i<indices.length;i+=3)add(...Array.from(indices.slice(i,i+3),j=>[attr.getX(j),attr.getY(j)]));
-  flat.dispose();const geo=new THREE.BufferGeometry();geo.setAttribute('position',new THREE.Float32BufferAttribute(positions,3));geo.setAttribute('normal',new THREE.Float32BufferAttribute(normals,3));return geo;
+  return curvedSurface(shape,R*Math.PI/36,r*Math.PI/36,([s,u])=>{const beta=s/R,angle=u/r,f=elbowFrame(beta,R);return {point:torusSurfacePoint(beta,angle,R,r),normal:f.normal.map((v,i)=>v*Math.cos(angle)+f.binormal[i]*Math.sin(angle))};},inward);
 }
 
 function formedElbowPadSurface(pad,r,outer,hole,inward=false){
   const R=pad.bendRadius,shape=new THREE.Shape(open(outer).map(q=>new THREE.Vector2(...q)));shape.holes=[path(open(hole))];
-  const flat=new THREE.ShapeGeometry(shape),attr=flat.getAttribute('position'),indices=flat.index?.array??Array.from({length:attr.count},(_,i)=>i),positions=[],normals=[];
-  const add=(a,b,c,depth=0)=>{const pairs=[[a,b,c],[b,c,a],[c,a,b]],size=q=>Math.max(Math.abs(q[0][0]-q[1][0])/R,Math.abs(q[0][1]-q[1][1])/r),worst=pairs.reduce((v,q)=>size(q)>size(v)?q:v);if(size(worst)>Math.PI/36&&depth<17){const[u,v,w]=worst,mid=u.map((x,i)=>(x+v[i])/2);add(u,mid,w,depth+1);add(mid,v,w,depth+1);return;}for(const[x,u]of[a,b,c]){const beta=x/R,phi=u/r,f=elbowFrame(beta,R);positions.push(...torusSurfacePoint(beta,phi,R,r));normals.push(...f.normal.map((v,i)=>(v*Math.cos(phi)+f.binormal[i]*Math.sin(phi))*(inward?-1:1)));}};
-  for(let i=0;i<indices.length;i+=3)add(...Array.from(indices.slice(i,i+3),j=>[attr.getX(j),attr.getY(j)]));flat.dispose();const geo=new THREE.BufferGeometry();geo.setAttribute('position',new THREE.Float32BufferAttribute(positions,3));geo.setAttribute('normal',new THREE.Float32BufferAttribute(normals,3));return geo;
+  return curvedSurface(shape,R*Math.PI/36,r*Math.PI/36,([x,u])=>{const beta=x/R,phi=u/r,f=elbowFrame(beta,R);return {point:torusSurfacePoint(beta,phi,R,r),normal:f.normal.map((v,i)=>v*Math.cos(phi)+f.binormal[i]*Math.sin(phi))};},inward);
 }
 
 function surface(outer, holes, radius, azimuth, inward = false) {
   const shape = new THREE.Shape(open(outer).map(p => new THREE.Vector2(...p)));
   shape.holes = holes.map(h => path(open(h)));
-  const flat = new THREE.ShapeGeometry(shape), attr = flat.getAttribute('position');
-  const indices = flat.index?.array ?? Array.from({ length: attr.count }, (_, i) => i);
-  const positions = [], normals = [];
-  // Subdivide in angle before rolling the planar triangles onto the cylinder.
-  const add = (a,b,c,depth=0) => {
-    const pairs = [[a,b,c],[b,c,a],[c,a,b]];
-    const worst = pairs.reduce((best,p) => Math.abs(p[0][1]-p[1][1]) > Math.abs(best[0][1]-best[1][1]) ? p : best);
-    if (Math.abs(worst[0][1]-worst[1][1])/radius > Math.PI/36 && depth < 13) {
-      const [u,v,w] = worst, mid = u.map((x,i)=>(x+v[i])/2);
-      add(u,mid,w,depth+1); add(mid,v,w,depth+1); return;
-    }
-    for (const p of [a,b,c]) {
-      positions.push(...cylindricalUVToWorld(p,radius,azimuth));
-      const normal=rotateAroundMain([0,Math.sin(p[1]/radius),Math.cos(p[1]/radius)],azimuth);
-      normals.push(...normal.map(v=>inward?-v:v));
-    }
-  };
-  for(let i=0;i<indices.length;i+=3) {
-    const tri=Array.from(indices.slice(i,i+3), j=>[attr.getX(j),attr.getY(j)]);
-    add(...tri);
-  }
-  flat.dispose();
-  const geo=new THREE.BufferGeometry();
-  geo.setAttribute('position',new THREE.Float32BufferAttribute(positions,3));
-  geo.setAttribute('normal',new THREE.Float32BufferAttribute(normals,3));
-  return geo;
+  return curvedSurface(shape,Infinity,radius*Math.PI/36,([x,u])=>({point:cylindricalUVToWorld([x,u],radius,azimuth),normal:rotateAroundMain([0,Math.sin(u/radius),Math.cos(u/radius)],azimuth)}),inward);
 }
 
 function loft(a,b) {
@@ -87,7 +56,7 @@ function loft(a,b) {
 
 export class JointViewer {
   constructor(container) {
-    this.container=container; this.parts={}; this.view='joint'; this.result=null;
+    this.container=container; this.parts={}; this.pickMeshes=[]; this.view='joint'; this.result=null;
     this.flags={explode:false,transparent:false,section:false};
     try {
       this.renderer=new THREE.WebGLRenderer({antialias:true,alpha:true,preserveDrawingBuffer:true});
@@ -126,7 +95,8 @@ export class JointViewer {
     this.renderer.setSize(width,height,false);this.camera.aspect=width/Math.max(1,height);this.camera.updateProjectionMatrix();this.render();
   }
   material(color) {return new THREE.MeshStandardMaterial({color,roughness:.48,metalness:.35,side:THREE.DoubleSide});}
-  mesh(geo,mat,group) {const mesh=new THREE.Mesh(geo,mat);group.add(mesh);return mesh;}
+  mesh(geo,mat,group) {geo.computeBoundingBox();const mesh=new THREE.Mesh(geo,mat);mesh.userData.part=group.name;group.add(mesh);this.pickMeshes.push(mesh);return mesh;}
+  intersectModel(ray){if(!this.model.visible)return null;this.model.updateMatrixWorld(true);return ray.intersectObjects(this.pickMeshes.filter(mesh=>mesh.visible&&mesh.parent.visible),false)[0]??null;}
   line(points,color,group,dashed=false) {
     const geo=new THREE.BufferGeometry().setFromPoints(points.map(p=>new THREE.Vector3(...p)));
     const mat=dashed?new THREE.LineDashedMaterial({color,dashSize:5,gapSize:3}):new THREE.LineBasicMaterial({color});
@@ -139,13 +109,13 @@ export class JointViewer {
   clear() {
     if(!this.available)return;
     this.model.traverse(item=>{item.geometry?.dispose();if(item.material){item.material.map?.dispose();item.material.dispose();}});
-    this.model.clear();this.marker.visible=false;this.parts={};this.render();
+    this.model.clear();this.marker.visible=false;this.parts={};this.pickMeshes=[];if(this.editor)this.editor.layoutKey=null;this.render();
   }
   update(result) {
     if(!this.available)return;
     const first=!this.result;this.result=result;this.clear();if(!result.valid)return;
     const {main:m,branch:b,pad,axes}=result.geometry,p=result.params;
-    for(const id of ['main','branch','pad']) {const group=new THREE.Group();this.parts[id]=group;this.model.add(group);}
+    for(const id of ['main','branch','pad']) {const group=new THREE.Group();group.name=id;this.parts[id]=group;this.model.add(group);}
     const mainMat=this.material(0x8195ab),branchMat=this.material(0x55b9df),padMat=this.material(0xdba05b);
     if(p.hostType==='elbow') {
       const e=result.geometry.elbow;
@@ -238,7 +208,7 @@ export class JointViewer {
     const displayingProxy=this.editor?.host&&!this.model.visible;
     const fitModel=displayingProxy?this.editor.group:this.result?.valid?this.model:this.editor.group;
     fitModel.updateMatrixWorld(true);const box=new THREE.Box3();
-    fitModel.traverse(object=>{if(!object.isMesh||!object.visible)return;object.geometry.computeBoundingBox();box.union(object.geometry.boundingBox.clone().applyMatrix4(object.matrixWorld));});
+    fitModel.traverse(object=>{if(!object.isMesh||!object.visible)return;if(!object.geometry.boundingBox)object.geometry.computeBoundingBox();box.union(object.geometry.boundingBox.clone().applyMatrix4(object.matrixWorld));});
     if(box.isEmpty())return;const center=box.getCenter(new THREE.Vector3());
     const params=displayingProxy?{...this.editor.params,...this.editor.draft}:this.result?.params??this.editor.params,frame=view==='joint'?positioningFrame(params):null;
     let candidates=frame?jointViewCandidates(params):null;
@@ -248,7 +218,7 @@ export class JointViewer {
       // Contact-oriented views also account for an elbow's other arm.
       this.editor?.group?.updateMatrixWorld(true);
       const host=this.editor?.host;
-      if(host)candidates=candidates.slice().sort((a,b)=>{const visible=c=>{const eye=origin.clone().addScaledVector(new THREE.Vector3(...c.direction),Math.max(box.getSize(new THREE.Vector3()).length()*3,radius*4)),ray=new THREE.Raycaster(eye,origin.clone().sub(eye).normalize()),hit=ray.intersectObject(host,false)[0];return !hit||eye.distanceTo(origin)-hit.distance<params.mainOD*.02;};return Number(visible(b))-Number(visible(a))||b.score-a.score;});
+      if(host){const distance=Math.max(box.getSize(new THREE.Vector3()).length()*3,radius*4);candidates=candidates.map(c=>{const eye=origin.clone().addScaledVector(new THREE.Vector3(...c.direction),distance),ray=new THREE.Raycaster(eye,origin.clone().sub(eye).normalize()),hit=ray.intersectObject(host,false)[0];return {...c,visible:!hit||eye.distanceTo(origin)-hit.distance<params.mainOD*.02};}).sort((a,b)=>Number(b.visible)-Number(a.visible)||b.score-a.score);}
     }
     const elbowPlan=(this.result?.params??this.editor.params).hostType==='elbow'&&view==='front';
     if(candidates)this.camera.up.set(...candidates[0].up);else this.camera.up.set(0,elbowPlan?1:0,elbowPlan?0:1);
@@ -257,9 +227,12 @@ export class JointViewer {
     const inverse=this.camera.matrixWorldInverse, projected=[];
     fitModel.updateMatrixWorld(true);
     fitModel.traverse(object=>{
-      const attr=object.geometry?.getAttribute('position');if(!object.isMesh||!object.visible||!attr)return;
+      if(!object.isMesh||!object.visible)return;
       const mother=object===this.editor?.host||object.parent===this.parts.main||this.parts.main&&(()=>{let p=object;while(p&&p!==this.parts.main)p=p.parent;return !!p;})();
-      for(let i=0;i<attr.count;i++){const point=new THREE.Vector3().fromBufferAttribute(attr,i).applyMatrix4(object.matrixWorld);if(candidates&&mother&&point.distanceTo(new THREE.Vector3(...frame.origin))>params.mainOD*.7)continue;projected.push(point.applyMatrix4(inverse));}
+      // Conservative bounding-box corners fit every visible part without a
+      // vertex-by-vertex scan. Joint view uses the local mother context below.
+      if(candidates&&mother)return;const bounds=object.geometry.boundingBox;
+      for(const x of[bounds.min.x,bounds.max.x])for(const y of[bounds.min.y,bounds.max.y])for(const z of[bounds.min.z,bounds.max.z])projected.push(new THREE.Vector3(x,y,z).applyMatrix4(object.matrixWorld).applyMatrix4(inverse));
     });
     if(candidates)for(const t of [-.55,.55])for(const s of [-.4,.4])for(const n of [-.15,.15])projected.push(new THREE.Vector3(...frame.origin.map((v,i)=>v+params.mainOD*(t*frame.tangent[i]+s*frame.side[i]+n*frame.normal[i]))).applyMatrix4(inverse));
     const extent=axis=>{let low=Infinity,high=-Infinity;for(const point of projected){low=Math.min(low,point[axis]);high=Math.max(high,point[axis]);}return high-low;};
@@ -279,6 +252,7 @@ export class JointViewer {
     this.marker.position.set(...point);this.marker.position.add(this.parts.branch.position);this.marker.visible=true;this.render();
   }
   highlightMother(point){if(!this.available||!this.result?.valid)return;this.marker.position.set(...point);this.marker.visible=true;this.render();}
-  render() {if(this.renderer&&this.scene&&this.camera){this.editor?.layout();this.renderer.render(this.scene,this.camera);}}
-  image() {if(!this.available)return '';this.render();return this.renderer.domElement.toDataURL('image/png');}
+  draw(){if(this.renderer&&this.scene&&this.camera){this.editor?.layout();this.renderer.render(this.scene,this.camera);}}
+  render(){if(this.frameRequest||!this.renderer)return;this.frameRequest=requestAnimationFrame(()=>{this.frameRequest=null;this.draw();});}
+  image(){if(!this.available)return '';if(this.frameRequest){cancelAnimationFrame(this.frameRequest);this.frameRequest=null;}this.draw();return this.renderer.domElement.toDataURL('image/png');}
 }

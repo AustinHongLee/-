@@ -81,8 +81,13 @@ export function torusLineIntersections(foot,direction,bendRadius,tubeRadius) {
   if(disc<-1e-14)return [];
   const half=Math.sqrt(Math.max(0,disc))/a,lo=center-half,hi=center+half;
   const critical=isolatePolynomial(polynomialDerivative(coeff),lo,hi),knots=unique([lo,...critical,hi]);
-  const pointAt=u=>add(foot,mul(d,u*scale));
-  const signed=u=>torusCoordinates(pointAt(u),bendRadius).tubeDistance-tubeRadius;
+  // Bisection only needs distance. Preserve the exact multiply/add/hypot
+  // order of pointAt + torusCoordinates without allocating vectors or
+  // calculating the unused angular coordinates and geometric normal.
+  const signed=u=>{
+    const t=u*scale,x=foot[0]+d[0]*t,y=foot[1]+d[1]*t-bendRadius,z=foot[2]+d[2]*t;
+    return Math.hypot(Math.hypot(x,y)-bendRadius,z)-tubeRadius;
+  };
   const values=[];
   for(const u of knots)if(Math.abs(signed(u))<1e-7)values.push(u);
   for(let i=0;i<knots.length-1;i++) {
