@@ -4,6 +4,7 @@ import {computeExactFormedElbowPadLocatorTable} from './formed-elbow-pad.js';
 import {hostTypeCards,connectionCards,elbowAlignmentCards,elbowPositionPicker,surfaceClockPicker,straightPositionPicker,conePositionPicker,branchAnglePicker,padShapeCards,visualPointerAction,visualPresetAction,visualKeyboardAction} from './visual-selectors.js';
 import {resolveElbowAlignment,elbowAlignmentLabel} from './elbow-axis.js';
 import {installEndAlignment} from './end-alignment-controller.js';
+import {issueGuidance,repairCandidate,isFitupField} from './repair-guidance.js';
 import { DEFAULT_PARAMS, computeJoint, computeExactStationTable } from './joint-model.js';
 import { computeLatestJoint } from './geometry-client.js';
 import { computeExactElbowLocatorTable } from './elbow-geometry.js';
@@ -43,7 +44,7 @@ let patternDetail=false,elbowHoleRows=[],fabricationErrorField='fab.stock';
 let computation=null,viewerGeometryKey=null;
 let timer,toastTimer,pending=false,previewHTML='',previewSuffix='列印檔.html';
 let lastValid=null,favorites=[],history=[];
-let endControls;
+let endControls,repairIssues=[];
 const viewer=new JointViewer($('viewer'));
 const modelEditor=new ModelEditor(viewer,{getParams:()=>state.params,onCommit:commitModelPatch,onAlign:end=>endControls.open(end),onPreview:text=>{$('model-edit-state').textContent=text||modelEditReadback();},onKeyboard:modelHandleKeyboard,onSelect:part=>{state.settingPanel=part==='pad'?2:1;setParameterOpen(true);renderForm();showWorkspace('model');notify(part==='pad'?'正在修改金色補強板。':'正在修改藍色支管的接法。');}});
 function disableManufacturing(){for(const id of ['svg-export','dxf-export','csv-export','report-button','quick-report','print-current-pattern','full-report','step-report'])if($(id))$(id).disabled=true;}
@@ -114,15 +115,19 @@ function displayErrors() {
   document.querySelectorAll('[data-field]').forEach(el=>{const err=state.result?.errors.find(e=>e.field===el.dataset.field);el.querySelector('input,select')?.setAttribute('aria-invalid',String(!!err));const target=el.querySelector('.field-error');if(target){target.hidden=!err;target.textContent=err?.message??'';}});
   const errors=[...(state.result?.errors??[])];if(state.fabricationError)errors.push({field:fabricationErrorField,message:state.fabricationError});
   if(state.result?.valid&&!fabricationReadiness(state.result).ready)errors.push({field:'tolerance',message:fabricationReadiness(state.result).reason});
-  $('form-errors').hidden=!errors.length;$('form-errors').innerHTML=errors.length?`<strong>${state.result?.errors.length||state.result?.valid&&!fabricationReadiness(state.result).ready?`先修正 ${errors.length} 項，才能出圖`:`加工紀錄 ${errors.length} 項需修正；工單暫停`}</strong>`+errors.map(e=>`<button type="button" class="issue-link" data-error-field="${esc(e.field)}"><span>${esc(e.message)}</span><b>前往修正 →</b></button>`).join(''):'';
+  repairIssues=errors.map(e=>issueGuidance(e,state.params));
+  $('form-errors').hidden=!errors.length;$('form-errors').innerHTML=errors.length?`<strong>${state.result?.errors.length||state.result?.valid&&!fabricationReadiness(state.result).ready?`先處理 ${errors.length} 個計算條件`:`加工紀錄 ${errors.length} 項需修正；幾何紙樣依計算結果出圖`}</strong>`+repairIssues.map((g,i)=>`<article class="repair-card"><h3>${esc(g.title)}</h3><p>${esc(g.detail)}</p><button type="button" class="issue-link" data-error-index="${i}"><b>${esc(g.actionLabel)} →</b></button>${g.actions.length?`<div class="repair-actions">${g.actions.map(a=>`<button type="button" data-repair-action="${esc(a.id)}"${pending?' disabled':''}>${esc(a.label)}</button><small>${esc(a.note)}</small>`).join('')}</div>`:''}<details><summary>查看計算原因</summary><p>${esc(g.reason)}</p></details></article>`).join('')+'<p id="repair-feedback" role="status" hidden></p>':'';
   for(const b of $('parameter-form').querySelectorAll('[data-setting-panel]')){const count=errors.filter(e=>settingPanelForField(e.field)===Number(b.dataset.settingPanel)).length;b.classList.toggle('has-error',!!count);const old=b.querySelector('.issue-count');if(old)old.remove();if(count)b.insertAdjacentHTML('beforeend',`<i class="issue-count" aria-label="${count} 項需修正">${count}</i>`);}
 }
 function jumpToIssue(field){
+  const error=state.result?.errors.find(e=>e.field===field),guide=issueGuidance(error??{field,message:''},state.params);
+  if(guide.end){showWorkspace('model');if(matchMedia('(max-width: 720px)').matches)setParameterOpen(false);endControls.open(guide.end);const input=$('end-alignment-content').querySelector(`[name="${CSS.escape(field)}"]:not([readonly])`);if(input){input.focus({preventScroll:true});input.scrollIntoView({block:'nearest'});}return;}
   setParameterOpen(true);state.settingPanel=settingPanelForField(field);renderForm();
-  if(state.settingPanel===3){showWorkspace('records');showResultTab('fitup');}
+  if(state.settingPanel===3&&isFitupField(field)){showWorkspace('records');showResultTab('fitup');}
   else if(state.settingPanel===4){showResultTab('validation');}
   else previewSetting();
-  const form=$('parameter-form'),key=CSS.escape(field);let target=(state.settingPanel===3?document:form).querySelector(`[name="${key}"]`);
+  const form=$('parameter-form'),key=CSS.escape(field);let target=(isFitupField(field)?$('fitup-panel'):form)?.querySelector(`[name="${key}"]`);
+  if(['mainOD','branchOD','mainEndOD'].includes(field)&&inputSetup[field==='mainOD'?'mainSize':field==='branchOD'?'branchSize':'endSize']!=='custom')target=$('pipe-size-'+field);
   if(field==='jointPosition'&&(state.params.hostType??'straight')==='straight'){
     const distance=form.querySelector('[name="surfacePosition"]');
     target=distance&&!distance.disabled?distance:form.querySelector('[name="positionMode"]');
@@ -133,7 +138,13 @@ function jumpToIssue(field){
   if(!target||target.disabled)target=state.settingPanel===0?form.querySelector('[name="mainWall"]'):state.settingPanel===2?form.querySelector('[name="padEnabled"]'):state.settingPanel===4?form.querySelector('[name="tolerance"]'):state.settingPanel===3?form.querySelector('[name^="fab."]'):form.querySelector('[name="positionMode"], [name="bendPosition"]:not(:disabled), [name="jointPosition"]:not(:disabled), [data-visual-field="connection"]');
   if(target){for(let p=target.parentElement;p&&p!==form;p=p.parentElement)if(p.tagName==='DETAILS')p.open=true;target.focus({preventScroll:true});target.scrollIntoView({behavior:'smooth',block:'center'});}
 }
-$('form-errors').addEventListener('click',event=>{const button=event.target.closest('[data-error-field]');if(button)jumpToIssue(button.dataset.errorField);});
+$('form-errors').addEventListener('click',async event=>{
+  const route=event.target.closest('[data-error-index]');if(route){const g=repairIssues[Number(route.dataset.errorIndex)];if(g)jumpToIssue(g.field);return;}
+  const button=event.target.closest('[data-repair-action]');if(!button||pending)return;
+  const snapshot={...state.params},candidate=repairCandidate(state.params,button.dataset.repairAction);if(!candidate)return;
+  button.disabled=true;const feedback=$('repair-feedback');if(feedback){feedback.hidden=false;feedback.textContent='正在檢查這個調整；通過完整計算才會套用。';}
+  try{const result=await computeLatestJoint(candidate);if(Object.keys(snapshot).length!==Object.keys(state.params).length||Object.keys(snapshot).some(key=>!Object.is(snapshot[key],state.params[key])))return;if(!fabricationReadiness(result).ready){if(feedback)feedback.textContent=`未套用：${(result.errors?.[0]?.message??fabricationReadiness(result).reason).replace(/[。.!]+$/,'')}。請回到原定位繼續調整。`;button.disabled=false;return;}endControls.close();commitModelPatch(result.params);notify('建議已通過完整幾何與出圖檢查，已套用；請核對新的定位尺寸。');}catch(error){if(error.name!=='AbortError'&&feedback)feedback.textContent=`未套用：${error.message}`;if(button.isConnected)button.disabled=false;}
+});
 function printFabricationPlan(){const f=state.fabrication,p=emptyFabricationPlan();p.stock=Number.isFinite(f.stock)&&f.stock>=0&&f.stock<=10000?f.stock:null;p.count=[4,8,12,24].includes(f.count)?f.count:12;p.preGaps=Array(p.count).fill(null);p.postGaps=Array(p.count).fill(null);p.tackAngles=f.tackAngles.filter(a=>Number.isFinite(a)&&a>=0&&a<360);return validateFabricationPlan(p);}
 function paperTemplates(){const ts=state.result?.templates??[];return ts.filter(t=>!['branch','main'].includes(t.id)&&!(t.id==='branch-local'&&ts.some(t=>t.id==='branch-rough'))).sort((a,b)=>(a.id.startsWith('branch')?0:a.id==='main-local'?1:a.id.startsWith('pad')?2:3)-(b.id.startsWith('branch')?0:b.id==='main-local'?1:b.id.startsWith('pad')?2:3));}
 function setParameterOpen(open){const wasOpen=!$('parameter-content').hidden;$('parameter-content').hidden=!open;$('parameter-toggle').setAttribute('aria-expanded',String(open));$('parameter-toggle').textContent=open?'收起設定':'修改尺寸';if(open&&!wasOpen){workspaceManual=false;previewSetting();}updateEditingPreview();if(wasOpen!==open&&matchMedia('(max-width: 720px)').matches&&viewer.view==='joint')requestAnimationFrame(()=>viewer.fit('joint'));}

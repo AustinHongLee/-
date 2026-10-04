@@ -9,3 +9,5 @@
 @media(max-width:720px){.workspace.editing-model .viewer{height:260px}.workspace.editing-model .model-panel{position:sticky;top:0}.workspace.editing-model .model-editor-bar span{width:auto;margin-left:auto;font-size:.75rem}.workspace.editing-model .model-editor-bar{padding-bottom:5px}.workspace.editing-model .model-operation-note{padding-top:5px}.workspace.editing-model .viewer-toolbar{justify-content:space-between;flex-wrap:nowrap;gap:5px}.workspace.editing-model .viewer-toolbar .toolbar-group{gap:4px}.workspace.editing-model .viewer-toolbar .button{padding:5px 7px}.model-view-options>summary{padding:5px 8px}.model-issue{margin:4px 10px;font-size:.8125rem}.model-editor-bar button{white-space:nowrap}}
 @media(max-width:720px) and (max-height:560px){.workspace.editing-model .model-panel{position:relative}.workspace.editing-model .viewer{height:210px}}
 @media(min-width:1100px){.model-panel.end-controls-open .viewer{width:calc(100% - 376px)}}
+/* Keep mobile form controls reachable; a tall sticky preview covered them. */
+@media(max-width:720px){.workspace.editing-model .model-panel{position:relative;top:auto}}

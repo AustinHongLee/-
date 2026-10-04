@@ -103,13 +103,15 @@ test('offset dummy and inserted cut points obey distinct outer/inner-wall bases 
   }
 });
 
-test('edge geometry is representable but tangency/finite-end limits still block manufacturing',()=>{
+test('closed external edge cuts retain a continuous selected-port contact instead of rejecting its zero gradient',()=>{
   for(const end of ['a','b']){
     const inside={...base,elbowAlignment:`${end}-edge`,elbowOffset:-1,elbowSideOffset:0,motherOpening:false};good(inside);
     for(const [elbowOffset,elbowSideOffset] of [[1,0],[0,1],[0,-1]]){
       const p={...inside,elbowOffset,elbowSideOffset},q=resolveElbowAlignment(p);assert.ok(Number.isFinite(q.bendPosition));
-      const r=computeElbowJoint(p);assert.equal(r.valid,false);assert.equal(r.manufacturingReady,false);assert.deepEqual(r.templates,[]);
-      assert.ok(r.errors.some(e=>/相切|端部|端面|交線/.test(e.message)),JSON.stringify(r.errors));
+      const r=good({...p,autoPrecision:true,tolerance:.1});assert.equal(r.manufacturingReady,true);
+      assert.equal(r.geometry.elbow.portEdgeContact.end,end.toUpperCase());
+      assert.equal(r.geometry.elbow.portEdgeContact.kind,'isolated-continuous-closed-cut-contact');
+      assert.deepEqual(r.geometry.elbow.outerHole3D,[]);
     }
   }
 });

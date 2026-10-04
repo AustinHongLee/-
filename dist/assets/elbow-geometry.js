@@ -1,5 +1,6 @@
 import {resolveElbowAlignment,elbowAlignmentReference,elbowAlignmentLabel,ELBOW_ALIGNMENT_MODES} from './elbow-axis.js';
 import {computeFormedElbowPad} from './formed-elbow-pad.js';
+import {edgeContactAngles} from './edge-sampling.js';
 /** Ideal finite circular elbow + straight branch, millimetres/degrees.
  * No dependency on the existing Site checkout. Torus coordinates are NOT an
  * isometric development of the elbow. Only the straight branch is developed.
@@ -116,7 +117,7 @@ export function torusLineIntersections(foot,direction,bendRadius,tubeRadius) {
 }
 
 function validate(raw) {
-  const p=resolveElbowAlignment({...DEFAULT_ELBOW_PARAMS,...raw}),errors=[],error=(field,message)=>errors.push({field,message});
+  const p=resolveElbowAlignment({...DEFAULT_ELBOW_PARAMS,...raw}),errors=[],error=(field,message,code)=>errors.push({field,message,...(code?{code}:{})});
   const shifted=['a-offset','b-offset','a-edge','b-edge'].includes(p.elbowAlignment);
   for(const field of ['mainOD','mainWall','branchOD','branchWall','branchLength','angle','rootGap','holeGap','projection',
     'bendRadius','bendAngle','bendPosition','surfaceClock','branchSwivel','elbowOffset','elbowSideOffset','tolerance','samples']) {
@@ -131,7 +132,7 @@ function validate(raw) {
   if(p.branchWall*2>=p.branchOD)error('branchWall','支管壁厚須小於外徑的一半。');
   if(p.bendRadius<=p.mainOD/2+p.rootGap)error('bendRadius','理想環面需彎曲中心半徑大於管外半徑與間隙。');
   if(p.bendAngle<=0||p.bendAngle>180)error('bendAngle','此版支援大於 0° 至 180° 的有限彎頭。');
-  if(p.bendPosition<=0||p.bendPosition>=p.bendAngle)error(shifted?'elbowOffset':'bendPosition',shifted?'偏移軸線的接點已超出有限彎頭兩端；請調整偏移量。':'接頭中心須位於彎頭兩端之間。');
+  if(p.bendPosition<=0||p.bendPosition>=p.bendAngle)error(shifted?'elbowOffset':'bendPosition',shifted?'偏移軸線的接點已超出有限彎頭兩端；請調整偏移量。':'接頭中心須位於彎頭兩端之間。','finite-end');
   if(p.elbowAlignment==='free'?(p.angle<5||p.angle>175):(p.angle<=0||p.angle>=180))error('angle','支管與當地切線夾角不在有效範圍。');
   if(!ELBOW_ALIGNMENT_MODES.includes(p.elbowAlignment))error('elbowAlignment','請選有效的端口定位方式。');
   if(typeof p.motherOpening!=='boolean')error('motherOpening','母管開孔設定須為布林值。');
@@ -154,6 +155,21 @@ function createModel(p) {
   const origin=add(frame.center,mul(m,R)),d=unit(add(mul(frame.tangent,Math.cos(a)),mul(add(mul(m,Math.cos(psi)),mul(k,Math.sin(psi))),Math.sin(a))));
   const e0=unit(sub(mul(frame.tangent,-1),mul(d,dot(mul(frame.tangent,-1),d)))),e90=unit(cross(e0,d));
   const normalDotDirection=dot(m,d),seed=new Map(),cache=new Map();
+  const reference=elbowAlignmentReference(p),edgeParallel=p.elbowAlignment.endsWith('-edge')&&reference;
+  // A constrained end-parallel line has an exact two-square-root solution.
+  // Its outside exit remains continuous at an isolated port-edge contact,
+  // although the torus gradient along the branch is zero there. A generic
+  // positive-gradient root filter cannot distinguish that closed cusp from
+  // a genuinely missing/open intersection.
+  let edgeContactTheta=null,edgeBack=0,edgeSide=0,edgeAcrossBack=0,edgeAcrossSide=0;
+  if(edgeParallel) {
+    const magnitude=Math.hypot(p.elbowOffset,p.elbowSideOffset);
+    edgeBack=magnitude?p.elbowOffset/magnitude:1;edgeSide=magnitude?p.elbowSideOffset/magnitude:0;
+    const outward=add(mul(reference.normal,edgeBack),[0,0,edgeSide]);
+    edgeContactTheta=wrap(Math.atan2(dot(outward,e90),dot(outward,e0)));
+    const across=add(mul(e0,-Math.sin(edgeContactTheta)),mul(e90,Math.cos(edgeContactTheta)));
+    edgeAcrossBack=dot(across,reference.normal);edgeAcrossSide=across[2];
+  }
   const normalExtrados=p.surfaceClock===0&&p.angle===90&&p.branchSwivel===0;
   const finite=point=>point[0]>=-1e-7&&dot([Math.cos(bend),Math.sin(bend),0],sub(point,[0,Rc,0]))<=1e-7;
   const coordinate=point=>{const q=torusCoordinates(point,Rc);return {beta:q.beta,phi:unwrap(q.phi,phi),uv:[Rc*q.beta,R*unwrap(q.phi,phi)]};};
@@ -170,9 +186,39 @@ function createModel(p) {
     return seed.get(minor);
   };
   const near=(radius,minor,theta)=>{
-    theta=wrap(theta);const key=`${radius}/${minor}/${theta.toFixed(13)}`;
+    // Preserve an already normalized contact parameter bit-for-bit. Adding
+    // and subtracting 2*pi loses ulps that a sqrt cusp magnifies to microns.
+    theta%=TAU;if(theta<0)theta+=TAU;const key=`${radius}/${minor}/${theta.toFixed(13)}`;
     if(cache.has(key))return cache.get(key);
     const f=foot(radius,theta);
+    if(edgeParallel) {
+      let delta=theta-edgeContactTheta;if(delta>Math.PI)delta-=TAU;else if(delta<-Math.PI)delta+=TAU;
+      const sinHalf=Math.sin(delta/2),sinDelta=Math.sin(delta),D=R-ro,
+        projectedRadius=R-(ro-radius);
+      // Use cos(delta)-1=-2*sin(delta/2)^2 and factored radial differences.
+      // At a +/-Z cusp, subtracting two rounded coordinates R-z otherwise
+      // destroys the O(delta^2) term and spuriously reports a missing root.
+      const u0=projectedRadius*edgeBack,z0=projectedRadius*edgeSide,
+        du=radius*(-2*edgeBack*sinHalf*sinHalf+edgeAcrossBack*sinDelta),
+        dz=radius*(-2*edgeSide*sinHalf*sinHalf+edgeAcrossSide*sinDelta),u=u0+du,z=z0+dz,
+        h2=(minor-z0-dz)*(minor+z0+dz),radialTolerance=2*minor*1e-10;
+      if(h2<-radialTolerance)throw new Error('支管輪廓超出此管壁的可交合範圍，無法形成封閉交線。');
+      const h=Math.sqrt(Math.max(0,h2)),radialDifference=((minor-R)+(ro-radius))*(minor+projectedRadius)+4*D*radius*sinHalf*sinHalf,
+        advance=u>=0&&h+u>0?radialDifference/(h+u):h-u,
+        s2=advance*(2*Rc+h+u),planarTolerance=2*(Rc+minor)*1e-10;
+      if(s2<-planarTolerance)throw new Error('支管輪廓超出此管壁的可交合範圍，無法形成封閉交線。');
+      const along=Math.sqrt(Math.max(0,s2)),point=add(add(reference.center,mul(reference.normal,u)),add([0,0,z],mul(reference.direction,along))),
+        t=dot(sub(point,f),d),info=torusCoordinates(point,Rc),normalDotDirection=dot(info.normal,d);
+      if(h2<=0||s2<=0||normalDotDirection<=0) {
+        const contact=add(reference.center,mul(add(mul(reference.normal,edgeBack),[0,0,edgeSide]),R));
+        const isolatedPortContact=D>1e-9&&Math.abs(radius-ro)<1e-9&&Math.abs(minor-R)<1e-9&&edgeBack>=-1e-12&&distance(point,contact)<1e-5;
+        if(!isolatedPortContact)throw new Error('此相切交線未形成孤立且連續的管口貼合點，不能製作。');
+      }
+      if(!finite(point))throw new Error('支管切口或主管開孔跨出有限彎頭端部。');
+      const result={t,point,...info,normalDotDirection,residual:info.tubeDistance-minor,foot:f,
+        uv:[Rc*info.beta,minor*unwrap(info.phi,phi)],radius,minor,theta};
+      cache.set(key,result);return result;
+    }
     // Exact circular-section solution for the narrowly defined radial
     // extrados case. It is not used for side, belly, swivel or oblique joints.
     if(normalExtrados) {
@@ -214,15 +260,17 @@ function createModel(p) {
     return {...q,t,point,unprojectedT:q.t,unprojectedPoint:q.point};
   };
   return {Rc,R,Ri,ro,ri,beta,phi,bend,frame,origin,d,e0,e90,m,normalDotDirection,
-    finite,coordinate,foot,roots,near,endPlanes,occupied,cut,cutMinor,projection,normalExtrados};
+    finite,coordinate,foot,roots,near,endPlanes,occupied,cut,cutMinor,projection,normalExtrados,
+    edgeParallel:!!edgeParallel,edgeContactTheta,edgeBack};
 }
 
-function extremum(fn,values,wantMax) {
+function extremum(fn,values,wantMax,angles) {
   const n=values.length-1,results=[];
   for(let i=0;i<n;i++) {
     const v=values[i],before=values[(i+n-1)%n],after=values[(i+1)%n];
     if(wantMax?v>=before&&v>=after:v<=before&&v<=after) {
-      let lo=TAU*(i-1)/n,hi=TAU*(i+1)/n,q=(Math.sqrt(5)-1)/2;
+      let lo=angles?(i?angles[i-1]:angles[n-1]-TAU):TAU*(i-1)/n,
+        hi=angles?angles[i+1]:TAU*(i+1)/n,q=(Math.sqrt(5)-1)/2;
       let x=hi-q*(hi-lo),y=lo+q*(hi-lo),fx=fn(x),fy=fn(y);
       for(let k=0;k<35;k++) {
         if(wantMax?fx>fy:fx<fy){hi=y;y=x;fy=fx;x=hi-q*(hi-lo);fx=fn(x);}
@@ -237,14 +285,26 @@ const perimeter=p=>p.slice(1).reduce((sum,v,i)=>sum+distance(v,p[i]),0);
 
 function build(raw) {
   const {p,errors}=validate(raw),warnings=[];
-  const fail=(field,message)=>({valid:false,params:p,errors:[...errors,...(message?[{field,message}]:[])],warnings,
+  const fail=(field,message,code)=>({valid:false,params:p,errors:[...errors,...(message?[{field,message,...(code?{code}:{})}]:[])],warnings,
     templates:[],geometry:null,verification:[],measurements:{},stationTable:[],manufacturingReady:false});
   if(errors.length)return fail();
-  const model=createModel(p),n=p.samples;
+  const model=createModel(p),angles=model.edgeParallel&&model.edgeBack>=-1e-12?
+    edgeContactAngles(p.samples,model.edgeContactTheta):Array.from({length:p.samples+1},(_,i)=>TAU*i/p.samples),n=angles.length-1;
   if(model.normalDotDirection<=1e-5)return fail('branchSwivel','支管必須朝主管外表面法線的外側；此方向近於相切或朝內。');
   const opening=p.motherOpening,tool=opening?(p.jointType==='on'?model.ri:model.ro)+p.holeGap:null;
+  const withStage=(code,field,fn)=>{
+    try{return fn();}catch(error){
+      if(/端部|端面/.test(error.message))error.code='finite-end';
+      else {
+        error.code??=code;
+        if(model.edgeParallel&&code==='mother-opening')error.message=`外輪廓齊線可達，但母管開孔已穿出內壁可接合範圍，無法形成封閉母孔。主管內半徑 ${model.Ri.toFixed(2)} mm，孔工具外沿距管口中心最遠 ${(model.R-model.ro+tool).toFixed(2)} mm；保持目前開孔接法需向中心退讓。`;
+        if(model.edgeParallel&&code==='branch-cut'&&p.jointType==='in')error.message=`外輪廓齊線可達，但內插魚口已穿出主管內壁可接合範圍，無法形成封閉切口。主管內半徑 ${model.Ri.toFixed(2)} mm，支管外沿距管口中心最遠 ${model.R.toFixed(2)} mm；保持內插接法需向中心退讓。`;
+      }
+      error.field??=field;throw error;
+    }
+  };
   const circle=(radius,minor,cut=false)=>{
-    const ring=Array.from({length:n},(_,i)=>cut?model.cut(radius,TAU*i/n):model.near(radius,minor,TAU*i/n));
+    const ring=angles.slice(0,-1).map(theta=>cut?model.cut(radius,theta):model.near(radius,minor,theta));
     ring.push({...ring[0],point:[...ring[0].point]});return ring;
   };
   let outer,inner,holeOuter=[],holeInner=[],contactOuter=[],contactInner=[],endT,maximumDepth,sampledMaxChordError=0,minimumProjectionClearance=Infinity;
@@ -262,12 +322,16 @@ function build(raw) {
       const delta=Math.asin(radius/(model.Rc+minor));
       if(model.beta-delta<0||model.beta+delta>model.bend)throw new Error('支管切口或主管開孔跨出有限彎頭端部。');
     }
-    outer=circle(model.ro,model.cutMinor,true);inner=circle(model.ri,model.cutMinor,true);
-    if(opening){holeOuter=circle(tool,model.R);holeInner=circle(tool,model.Ri);}else{contactOuter=circle(model.ro,model.R);contactInner=circle(model.ri,model.R);}
-    const maxT=Math.max(extremum(t=>model.cut(model.ro,t).t,outer.map(q=>q.t),true),
-      extremum(t=>model.cut(model.ri,t).t,inner.map(q=>q.t),true));
+    outer=withStage('branch-cut',p.jointType==='in'?'elbowAlignment':'elbowGeometry',()=>circle(model.ro,model.cutMinor,true));
+    inner=withStage('branch-cut','elbowGeometry',()=>circle(model.ri,model.cutMinor,true));
+    if(opening){
+      holeOuter=withStage('mother-opening','holeGap',()=>circle(tool,model.R));
+      holeInner=withStage('mother-opening','holeGap',()=>circle(tool,model.Ri));
+    }else{contactOuter=withStage('branch-cut','elbowGeometry',()=>circle(model.ro,model.R));contactInner=withStage('branch-cut','elbowGeometry',()=>circle(model.ri,model.R));}
+    const maxT=Math.max(extremum(t=>model.cut(model.ro,t).t,outer.map(q=>q.t),true,angles),
+      extremum(t=>model.cut(model.ri,t).t,inner.map(q=>q.t),true,angles));
     endT=maxT+p.branchLength;
-    maximumDepth=endT-extremum(t=>model.cut(model.ro,t).t,outer.map(q=>q.t),false);
+    maximumDepth=endT-extremum(t=>model.cut(model.ro,t).t,outer.map(q=>q.t),false,angles);
     const series=[[model.ro,model.cutMinor,true,outer],[model.ri,model.cutMinor,true,inner],
       ...(opening?[[tool,model.R,false,holeOuter],[tool,model.Ri,false,holeInner]]:[[model.ro,model.R,false,contactOuter],[model.ri,model.R,false,contactInner]])];
     for(const [radius,minor,isCut,ring] of series)for(let i=0;i<n;i++) {
@@ -278,7 +342,8 @@ function build(raw) {
       const uv=a.uv,back=torusSurfacePoint(uv[0]/model.Rc,uv[1]/minor,model.Rc,minor);
       roundTripError=Math.max(roundTripError,distance(back,isCut?a.unprojectedPoint:a.point));
       for(const fraction of FRACTIONS) {
-        const q=isCut?model.cut(radius,TAU*(i+fraction)/n):model.near(radius,minor,TAU*(i+fraction)/n);
+        const theta=angles[i]+(angles[i+1]-angles[i])*fraction,
+          q=withStage(isCut?'branch-cut':opening?'mother-opening':'branch-cut',isCut?'elbowGeometry':opening?'holeGap':'elbowGeometry',()=>isCut?model.cut(radius,theta):model.near(radius,minor,theta));
         sampledMaxChordError=Math.max(sampledMaxChordError,distance(q.point,lerp(a.point,b.point,fraction)));
         // Branch circumference is exactly linear in theta, so its planar
         // development chord error is the axis-depth deviation alone.
@@ -295,6 +360,11 @@ function build(raw) {
       // Treat sampled zero/negative retained length as a real invalid body.
       // This adds a finite-probe safety gate, not a whole-wall extrema proof.
       if(cut.t>=endT-1e-7){const error=new RangeError('支管壁厚內的切口到達或超過自由直端；請增加支管最短長度後重新核對。');error.field='branchLength';throw error;}
+      // The analytic end-parallel exit has planar radius Rc+h >= Rc.
+      // Retained on-material increases that radius monotonically, so it
+      // cannot enter either the full torus or a finite end annulus. This
+      // includes an isolated zero-gradient contact at the selected port.
+      if(model.edgeParallel&&p.jointType==='on'){wallChecks++;return Infinity;}
       // Normal extrados: after the near cut, u=Rc+R+t grows, and
       // hypot(hypot(u,w)-Rc,z) is monotone. beta converges toward beta0.
       // Thus no retained outward portion can hit another arm or end annulus.
@@ -360,13 +430,13 @@ function build(raw) {
         checkWall(radius,(lo+hi)/2);
       }
     }
-  }catch(e){return fail(e.field??'elbowGeometry',e.message);}
+  }catch(e){return fail(e.field??'elbowGeometry',e.message,e.code??(/端部|端面/.test(e.message)?'finite-end':/干涉|穿越|碰/.test(e.message)?'body-interference':/相切|開放/.test(e.message)?'tangent-open':'branch-cut'));}
   const C=TAU*model.ro,outerCut=outer.map(q=>q.point),innerCut=inner.map(q=>q.point);
-  const endRing=radius=>close(Array.from({length:n},(_,i)=>add(model.foot(radius,TAU*i/n),mul(model.d,endT))));
-  const branchCurve=outer.map((q,i)=>[C*i/n,endT-q.t]),innerCurve=inner.map((q,i)=>[C*i/n,endT-q.t]);
+  const endRing=radius=>close(angles.slice(0,-1).map(theta=>add(model.foot(radius,theta),mul(model.d,endT))));
+  const branchCurve=outer.map((q,i)=>[C*angles[i]/TAU,endT-q.t]),innerCurve=inner.map((q,i)=>[C*angles[i]/TAU,endT-q.t]);
   const branchOutline=close([[0,0],[C,0],...[...branchCurve].reverse()]);
   const height=Math.max(...branchCurve.map(q=>q[1]));
-  const stationTable=outer.map((q,i)=>({hostType:'elbow',station:i,angle:360*i/n,circumference:C*i/n,
+  const stationTable=outer.map((q,i)=>({hostType:'elbow',station:i,angle:360*angles[i]/TAU,circumference:C*angles[i]/TAU,
     outerDepth:endT-q.t,innerDepth:endT-inner[i].t,outerPoint:q.point,innerPoint:inner[i].point}));
   const template={id:'branch',title:'彎頭母管／直支管 fishmouth 樣板',basis:'直支管實際外徑包覆',
     outer:branchOutline,holes:[],references:[{points:innerCurve,label:'內緣對應角度參考（非內徑展開）',type:'inner-edge'},
@@ -402,8 +472,8 @@ function build(raw) {
     {id:'roundtrip',label:'環面角度參數回算誤差（非等距展開）',value:roundTripError,unit:'mm',tolerance:p.tolerance,status:roundTripError<=p.tolerance?'pass':'fail'},
     {id:'closure',label:'近側交線閉合誤差',value:closure,unit:'mm',tolerance:p.tolerance,status:closure<=p.tolerance?'pass':'fail'},
     {id:'chord',label:'採樣弦差（含數值餘量）',value:chord,unit:'mm',tolerance:p.tolerance,status:chord<=p.tolerance?'pass':'warning'},
-    {id:'wall-collision',label:model.normalExtrados?'外背法線管身解析排除干涉／伸入探查':'有限管身壁厚探查',
-      value:wallChecks,unit:'samples',tolerance:0,status:'pass',basis:model.normalExtrados?'analytic-extrados-radial-monotonicity':'finite-probes'}];
+    {id:'wall-collision',label:model.edgeParallel&&p.jointType==='on'?'端口平行外貼管身解析排除干涉':model.normalExtrados?'外背法線管身解析排除干涉／伸入探查':'有限管身壁厚探查',
+      value:wallChecks,unit:'samples',tolerance:0,status:'pass',basis:model.edgeParallel&&p.jointType==='on'?'analytic-end-parallel-outer-exit-monotonicity':model.normalExtrados?'analytic-extrados-radial-monotonicity':'finite-probes'}];
   if(reference){const v=sub(model.origin,reference.origin??reference.center),along=dot(v,reference.direction),axisDistance=norm(sub(v,mul(reference.direction,along))),axisAngle=Math.atan2(norm(cross(model.d,reference.direction)),dot(model.d,reference.direction))*180/Math.PI;
     const coaxial=p.elbowAlignment.endsWith('-axis');
     verification.push({id:'axis-distance',label:coaxial?`支管與 ${reference.end} 端中心線同軸距離`:`支管與 ${reference.end} 端指定偏移軸線距離`,value:axisDistance,unit:'mm',tolerance:p.tolerance,status:axisDistance<=p.tolerance?'pass':'fail'},{id:'axis-direction',label:`支管與 ${reference.end} 端延伸方向偏差`,value:axisAngle,unit:'°',tolerance:1e-7,status:axisAngle<=1e-7?'pass':'fail'});
@@ -411,6 +481,12 @@ function build(raw) {
       const length=Math.hypot(p.elbowOffset,p.elbowSideOffset),back=length?p.elbowOffset/length:1,side=length?p.elbowSideOffset/length:0,
         outlineError=Math.abs(reference.offset*back+reference.sideOffset*side+model.ro-model.R);
       verification.push({id:'edge-alignment',label:`支管與 ${reference.end} 端同側外輪廓齊線誤差`,value:outlineError,unit:'mm',tolerance:p.tolerance,status:outlineError<=p.tolerance?'pass':'fail'});
+      if(model.edgeBack>=-1e-12) {
+        geometry.elbow.portEdgeContact={end:reference.end,theta:model.edgeContactTheta,
+          point:add(reference.center,mul(add(mul(reference.normal,back),[0,0,side]),model.R)),
+          kind:'isolated-continuous-closed-cut-contact'};
+        warnings.push(`${reference.end} 端同側外沿齊線的定位足跡含一個管口邊界貼合點；${p.rootGap===0?'魚口在該點連續但有尖點':'魚口另依外貼間隙外移'}，已加密取樣，母管是否開孔仍依接法檢查。`);
+      }
     }
   }
   warnings.push(model.normalExtrados?
@@ -424,11 +500,11 @@ function build(raw) {
     projectedLength:model.projection,normalDotDirection:model.normalDotDirection,minIntersectionNormalDot:minNormalDot,
     elbowCenterlineLength:model.Rc*model.bend,elbowBackSpineLength:(model.Rc+model.R)*model.bend};
   const result={valid:true,params:p,errors:[],warnings,templates:[template],geometry,verification,measurements,stationTable,
-    sampling:{sampledMaxChordError,guardFactor:GUARD},
-    wallEnvelope:{method:model.normalExtrados&&p.jointType==='on'?'analytic-extrados-outward-retained-body-clearance':
+    sampling:{sampledMaxChordError,guardFactor:GUARD,...(model.edgeParallel&&model.edgeBack>=-1e-12?{angularMethod:'fourth-power-port-contact-grid',segments:n,contactTheta:model.edgeContactTheta}: {})},
+    wallEnvelope:{method:model.edgeParallel&&p.jointType==='on'?'analytic-end-parallel-outward-body-clearance-with-finite-contour-probes':model.normalExtrados&&p.jointType==='on'?'analytic-extrados-outward-retained-body-clearance':
       'radial-wall-stations-interior-angular-probes-and-polished-insertion-limits',radii:wallRadii,
       angularSamples:model.normalExtrados&&p.jointType==='on'?0:wallAngularSamples,checks:wallChecks,
-      retainedBodyMethod:model.normalExtrados?'analytic-extrados-radial-monotonicity':'finite-probes',
+      retainedBodyMethod:model.edgeParallel&&p.jointType==='on'?'analytic-end-parallel-outer-exit-monotonicity':model.normalExtrados?'analytic-extrados-radial-monotonicity':'finite-probes',
       rigorous:false,roughCutSupported:false},capabilities:{motherOpening:opening,roughCut:false,pad:false,wholeHostDevelopment:false}};
   if(p.padEnabled){
     const formed=computeFormedElbowPad(result,p);
@@ -462,7 +538,7 @@ export function computeElbowJoint(raw={}) {
   const precision={requestedSamples,effectiveSamples:result.params.samples,cap:ELBOW_SAMPLE_CAP,auto:result.params.autoPrecision,
     metTolerance:met,maxChordError:error,tolerance:result.params.tolerance,
     sampledMaxChordError:result.sampling?.sampledMaxChordError??null,guardFactor:GUARD,
-    method:'sampled-interior-eighth-points-with-numerical-margin'};
+    method:'sampled-interior-eighth-points-with-numerical-margin',contourSegments:result.sampling?.segments??result.params.samples};
   if(result.valid&&result.params.autoPrecision&&!met)return {...result,valid:false,geometry:null,templates:[],stationTable:[],
     errors:[{field:'tolerance',message:'已達 4096 段上限仍未符合採樣弦差容差；已停止製作輸出。'}],precision,manufacturingReady:false};
   return {...result,precision,manufacturingReady:result.valid&&met&&result.verification.every(v=>v.status!=='fail')};
