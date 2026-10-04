@@ -229,18 +229,21 @@ export class JointViewer {
   setFlag(name,value) {this.flags[name]=value;this.applyFlags();}
   setLayer(name,value) {if(this.parts[name]){this.parts[name].visible=value;this.render();}}
   fit(view=this.view) {
-    if(!this.result?.valid||!this.available)return;
+    if(!this.available||!this.result?.valid&&!this.editor?.host)return;
     this.resize();
     this.view=view;
-    const box=new THREE.Box3().setFromObject(this.model),center=box.getCenter(new THREE.Vector3()),size=box.getSize(new THREE.Vector3());
-    const elbowPlan=this.result.params.hostType==='elbow'&&view==='front';
+    const fitModel=this.result?.valid?this.model:this.editor.group;
+    fitModel.updateMatrixWorld(true);const box=new THREE.Box3();
+    fitModel.traverse(object=>{if(!object.isMesh||!object.visible)return;object.geometry.computeBoundingBox();box.union(object.geometry.boundingBox.clone().applyMatrix4(object.matrixWorld));});
+    if(box.isEmpty())return;const center=box.getCenter(new THREE.Vector3());
+    const elbowPlan=(this.result?.params??this.editor.params).hostType==='elbow'&&view==='front';
     this.camera.up.set(0,elbowPlan?1:0,elbowPlan?0:1);
     const dir=elbowPlan?new THREE.Vector3(0,0,1):view==='front'?new THREE.Vector3(0,-1,.04):view==='side'?new THREE.Vector3(1,0,.04):new THREE.Vector3(1,-1.5,1.1).normalize();
     this.camera.position.copy(center).add(dir);this.camera.lookAt(center);this.camera.updateMatrixWorld();
     const inverse=this.camera.matrixWorldInverse, projected=[];
-    this.model.updateMatrixWorld(true);
-    this.model.traverse(object=>{
-      const attr=object.geometry?.getAttribute('position');if(!attr)return;
+    fitModel.updateMatrixWorld(true);
+    fitModel.traverse(object=>{
+      const attr=object.geometry?.getAttribute('position');if(!object.isMesh||!object.visible||!attr)return;
       for(let i=0;i<attr.count;i++)projected.push(new THREE.Vector3().fromBufferAttribute(attr,i).applyMatrix4(object.matrixWorld).applyMatrix4(inverse));
     });
     const extent=axis=>{let low=Infinity,high=-Infinity;for(const point of projected){low=Math.min(low,point[axis]);high=Math.max(high,point[axis]);}return high-low;};
@@ -259,6 +262,6 @@ export class JointViewer {
     this.marker.position.set(...point);this.marker.position.add(this.parts.branch.position);this.marker.visible=true;this.render();
   }
   highlightMother(point){if(!this.available||!this.result?.valid)return;this.marker.position.set(...point);this.marker.visible=true;this.render();}
-  render() {if(this.renderer&&this.scene&&this.camera)this.renderer.render(this.scene,this.camera);}
+  render() {if(this.renderer&&this.scene&&this.camera){this.editor?.layout();this.renderer.render(this.scene,this.camera);}}
   image() {if(!this.available)return '';this.render();return this.renderer.domElement.toDataURL('image/png');}
 }
