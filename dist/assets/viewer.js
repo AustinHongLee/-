@@ -12,6 +12,15 @@ const TAU = Math.PI * 2;
 const open = p => p.slice(0, -1);
 const path = points => new THREE.Path(points.map(p => new THREE.Vector2(...p)));
 
+// Display triangulation preserves the section's material holes and concavities.
+// The physical cut contour is supplied by the kernel, never a circular proxy.
+function steelCap(loops,key){
+  const outer=loops.find(loop=>loop.role==='outer'),holes=loops.filter(loop=>loop.role==='inner');
+  const all=[outer,...holes],section=all.map(loop=>open(loop.sectionPoints).map(q=>new THREE.Vector2(...q))),points=all.flatMap(loop=>open(loop[key]));
+  const triangles=THREE.ShapeUtils.triangulateShape(section[0],section.slice(1)),geometry=new THREE.BufferGeometry();
+  geometry.setAttribute('position',new THREE.Float32BufferAttribute(triangles.flatMap(tri=>tri.flatMap(i=>points[i])),3));geometry.computeVertexNormals();return geometry;
+}
+
 // Display-only tessellation keeps all boundary points. Fixed angular strips
 // avoid recursively exploding the long triangles joining a small hole to a pipe.
 function curvedSurface(shape,xStep,yStep,map,inward=false){
@@ -142,9 +151,9 @@ export class JointViewer {
     const ring=(x,r)=>Array.from({length:97},(_,i)=>cylindricalUVToWorld([x,r*(-Math.PI+TAU*i/96)],r,p.azimuth));
     for(const [r,hole,inward] of [[m.outerRadius,m.outerHoleUV,false],[m.innerRadius,m.innerHoleUV,true]]) {
       const outer=[[0,-Math.PI*r],[m.length,-Math.PI*r],[m.length,Math.PI*r],[0,Math.PI*r],[0,-Math.PI*r]];
-      this.mesh(surface(outer,[hole],r,p.azimuth,inward),mainMat.clone(),this.parts.main).userData.pickSurface=inward?'mother-inner':'mother-outer';
+      this.mesh(surface(outer,hole.length?[hole]:[],r,p.azimuth,inward),mainMat.clone(),this.parts.main).userData.pickSurface=inward?'mother-inner':'mother-outer';
     }
-    this.mesh(loft(m.outerHole3D,m.innerHole3D),mainMat.clone(),this.parts.main);
+    if(m.outerHole3D.length)this.mesh(loft(m.outerHole3D,m.innerHole3D),mainMat.clone(),this.parts.main);
     for(const x of [0,m.length]) {
       this.mesh(loft(ring(x,m.outerRadius),ring(x,m.innerRadius)),mainMat.clone(),this.parts.main);
       this.line(ring(x,m.outerRadius),0xa7bbd0,this.parts.main);
@@ -153,9 +162,20 @@ export class JointViewer {
     const seam=[cylindricalUVToWorld([0,-Math.PI*m.outerRadius],m.outerRadius+.3,p.azimuth),cylindricalUVToWorld([m.length,-Math.PI*m.outerRadius],m.outerRadius+.3,p.azimuth)];
     this.line(seam,0x677e99,this.parts.main,true);
     }
-    for(const [a,c] of [[b.outerCut,b.outerEnd],[b.innerCut,b.innerEnd],[b.outerCut,b.innerCut],[b.outerEnd,b.innerEnd]])this.mesh(loft(a,c),branchMat.clone(),this.parts.branch);
-    this.line(b.outerCut,0xa7e8ff,this.parts.branch);this.line(b.outerEnd,0xa7e8ff,this.parts.branch);
-    this.line([b.outerCut[0],b.outerEnd[0]],0xc6f0ff,this.parts.branch,true);
+    if(result.geometry.steel){
+      const steel=result.geometry.steel;
+      for(const face of steel.faces){
+        this.mesh(loft(face.cut3D,face.end3D),branchMat.clone(),this.parts.branch).userData.steelFace=face.id;
+        this.line(face.cut3D,face.role==='inner'?0x67a5ba:0xa7e8ff,this.parts.branch);
+        this.line([face.cut3D[0],face.end3D[0]],0x4e8dad,this.parts.branch,true);
+        if(face.role==='outer'&&face.kind==='line'&&face.width>10){const q=face.end3D[Math.floor(face.end3D.length/2)];this.label(face.id,q,this.parts.branch,Math.max(6,Math.min(11,p.mainOD*.04)));}
+      }
+      for(const key of['cut3D','end3D'])this.mesh(steelCap(steel.loops,key),branchMat.clone(),this.parts.branch);
+    }else{
+      for(const [a,c] of [[b.outerCut,b.outerEnd],[b.innerCut,b.innerEnd],[b.outerCut,b.innerCut],[b.outerEnd,b.innerEnd]])this.mesh(loft(a,c),branchMat.clone(),this.parts.branch);
+      this.line(b.outerCut,0xa7e8ff,this.parts.branch);this.line(b.outerEnd,0xa7e8ff,this.parts.branch);
+      this.line([b.outerCut[0],b.outerEnd[0]],0xc6f0ff,this.parts.branch,true);
+    }
     if(pad?.hostType==='elbow'){
       this.mesh(formedElbowPadSurface(pad,pad.innerRadius,pad.innerBoundaryUV,pad.innerHoleUV,true),padMat.clone(),this.parts.pad);
       this.mesh(formedElbowPadSurface(pad,pad.outerRadius,pad.outerBoundaryUV,pad.outerHoleUV),padMat.clone(),this.parts.pad);

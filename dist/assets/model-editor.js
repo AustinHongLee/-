@@ -1,5 +1,12 @@
 import * as THREE from 'three';
 import {positioningFrame,positionFromSurfacePoint,directionFromWorldVector,hostEndFrames} from './model-positioning.js';
+import {createSteelSection,sampleSectionBoundary} from './steel-sections.js';
+
+function previewSectionGeometry(p){
+  const section=createSteelSection(p);if(!section.valid)return null;
+  const boundaries=section.boundaries.map(b=>sampleSectionBoundary(section,b.id,48).slice(0,-1).map(q=>new THREE.Vector2(...q))),shape=new THREE.Shape(boundaries[0]);
+  shape.holes=boundaries.slice(1).map(points=>new THREE.Path(points));const geometry=new THREE.ExtrudeGeometry(shape,{depth:1,bevelEnabled:false,steps:1});geometry.translate(0,0,-.5);return geometry;
+}
 
 /** The uncut outside surface is the only picking target. Rendered holes,
  * wall faces, split pads and exploded parts never determine a new location. */
@@ -35,7 +42,7 @@ export class ModelEditor {
     canvas.addEventListener('pointercancel',()=>{this.tap=null;},true);
     canvas.addEventListener('pointerup',event=>{
       const tap=this.tap;this.tap=null;if(!this.enabled||this.modal||this.busy||!this.currentParams()||!tap||tap.id!==event.pointerId||tap.moved)return;
-      const visibleHit=this.modelHit(event),part=this.pickPart(event,visibleHit);if(part){this.clearHover();this.onSelect?.(part);return;}
+      const visibleHit=this.modelHit(event),part=this.pickPart(event,visibleHit);if(part){this.clearHover();this.onSelect?.(part,visibleHit.object.userData.steelFace);return;}
       if(this.locked){this.onPreview('目前沿管口方向定位。點管口改偏移，或選「自由定位」。');return;}
       const point=this.pick(event,true,visibleHit);if(!point)return;
       const patch=positionFromSurfacePoint(this.params,point.toArray());if(patch){this.preview(patch);this.onCommit(patch);}
@@ -78,13 +85,18 @@ export class ModelEditor {
     const preview=!!this.draft||!this.result?.valid;
     this.viewer.model.visible=!preview;this.host.material.opacity=preview?.8:0;
     this.host.material.depthWrite=preview;
-    this.ghost.visible=preview&&!!frame&&Number.isFinite(p.branchOD)&&p.branchOD>0;this.axis.visible=!!frame&&this.enabled;
+    const steel=p.branchSection&&p.branchSection!=='pipe',profileKey=JSON.stringify(steel?[p.branchSection,p.branchOD,p.branchWall,p.sectionWidth,p.sectionHeight,p.sectionWall,p.sectionWeb,p.sectionFlange,p.sectionRadius,p.sectionSlope]:['pipe']);
+    if(profileKey!==this.profileKey){const geometry=steel?previewSectionGeometry(p):new THREE.CylinderGeometry(1,1,1,64,1,true);this.ghost.geometry.dispose();this.ghost.geometry=geometry??new THREE.BufferGeometry();this.profileValid=!!geometry;this.profileKey=profileKey;}
+    this.ghost.visible=preview&&!!frame&&this.profileValid;this.axis.visible=!!frame&&this.enabled;
     if(!frame){this.layout();return;}
     let length=Math.max(p.mainOD*.8,Number.isFinite(p.branchLength)?p.branchLength:150);
     if(!preview&&this.result.geometry.branch.outerEnd?.length){const ring=this.result.geometry.branch.outerEnd.slice(0,-1),end=ring.reduce((sum,q)=>sum.map((v,i)=>v+q[i]/ring.length),[0,0,0]);length=end.reduce((v,q,i)=>v+(q-frame.origin[i])*frame.direction[i],0);}
     length=Math.max(p.mainOD*.4,length);this.tip=frame.origin.map((v,i)=>v+frame.direction[i]*length);
     this.ghost.position.set(...frame.origin.map((v,i)=>(v+this.tip[i])/2));const radius=Number.isFinite(p.branchOD)&&p.branchOD>0?p.branchOD/2:1;this.ghost.scale.set(radius,length,radius);
-    this.ghost.quaternion.setFromUnitVectors(new THREE.Vector3(0,1,0),new THREE.Vector3(...frame.direction));
+    if(steel){
+      const d=new THREE.Vector3(...frame.direction),u=new THREE.Vector3(...frame.tangent).negate();u.addScaledVector(d,-u.dot(d)).normalize();const v=u.clone().cross(d).normalize(),theta=p.sectionRotation*Math.PI/180,ur=u.clone().multiplyScalar(Math.cos(theta)).addScaledVector(v,Math.sin(theta)),vr=v.clone().multiplyScalar(Math.cos(theta)).addScaledVector(u,-Math.sin(theta));
+      this.ghost.matrixAutoUpdate=false;this.ghost.matrix.makeBasis(ur,vr,d.multiplyScalar(length));this.ghost.matrix.setPosition(new THREE.Vector3(...frame.origin.map((q,i)=>(q+this.tip[i])/2)));
+    }else{this.ghost.matrixAutoUpdate=true;this.ghost.quaternion.setFromUnitVectors(new THREE.Vector3(0,1,0),new THREE.Vector3(...frame.direction));}
     const axisPosition=this.axis.geometry.getAttribute('position');axisPosition.setXYZ(0,...frame.origin);axisPosition.setXYZ(1,...this.tip);axisPosition.needsUpdate=true;this.axis.geometry.computeBoundingSphere();
     this.axis.material.color.set(!this.result?.valid&&!this.draft?0xff8b81:0x65d8ff);
     this.layout();

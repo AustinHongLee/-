@@ -6,10 +6,12 @@ import { computeExactElbowStationTable } from './elbow-geometry.js';
 import { computeExactConicalStationTable,computeExactConicalLocatorTable,conicalDevelopmentToWorld } from './conical-geometry.js';
 import { buildElbowWorkOrderHTML,elbowWorkOrderPageRoles } from './elbow-field.js';
 import {ELBOW_ALIGNMENT_MODES} from './elbow-axis.js';
+import {isSteelJoint,steelStationCSV,steelTemplateLegend,steelPaperPositionRecipe,steelWorkOrderPagePlan,buildSteelWorkOrderHTML} from './steel-exports.js';
 export const PROJECT_FORMAT = 'pipe-fabrication-project';
 export const PROJECT_VERSION = 1;
 
 const PARAM_RULES = Object.freeze({
+  branchSection:['pipe','chs','shs','rhs','h','i','l','c'],sectionWidth:'positive',sectionHeight:'positive',sectionWall:'positive',sectionWeb:'positive',sectionFlange:'positive',sectionRadius:'nonnegative',sectionRotation:'number',sectionSlope:'number',
   hostType:['straight','elbow','cone'],mainEndOD:'positive',elbowAlignment:ELBOW_ALIGNMENT_MODES,elbowOffset:'number',elbowSideOffset:'number',motherOpening:'boolean',bendRadius:'positive',bendAngle:'bendAngle',bendPosition:'number',surfaceClock:'number',branchSwivel:'number',
   mainOD: 'positive', mainWall: 'positive', mainLength: 'positive', jointPosition: 'number',
   branchOD: 'positive', branchWall: 'positive', branchLength: 'positive', angle: 'angle',
@@ -129,9 +131,9 @@ function geometryMarkup(t, options = {}) {
   let output = `<g fill="none" stroke="#000" stroke-width="${stroke}" stroke-linejoin="round">`;
   if (keep) output += `<path d="${t.materialOutline ? pathD(t.materialOutline) : compound}" fill="#f4f4f4" fill-rule="evenodd" stroke="none"/>`;
   output += glueMarkup(t);
-  output += `<path d="${outerPath}"${paperBoundary(t) ? ' data-layer="PAPER_BOUNDARY" stroke-width="0.18" stroke-dasharray="1 1"' : ''}/><g data-layer="CUT_HOLE">${t.holes.map(h => `<path d="${pathD(h)}"/>`).join('')}</g>`;
+  output += `<path d="${outerPath}"${paperBoundary(t) ? ' data-layer="PAPER_BOUNDARY" stroke-width="0.18" stroke-dasharray="1 1"' : ''}/>${t.holes.length?`<g data-layer="CUT_HOLE">${t.holes.map(h => `<path d="${pathD(h)}"/>`).join('')}</g>`:''}`;
   output += `<g data-layer="DATUM" stroke-width="0.2">${t.references.map(r => `<path d="${pathD(r.points, r.closed && r.type !== 'cut-line')}"${r.type === 'cut-line' ? ' data-layer="CUT_FISHMOUTH" stroke-width=".4"' : r.type === 'rough-cut' ? ' data-layer="ROUGH_CUT" stroke-width=".45" stroke-dasharray="3 1"' : r.type === 'tack-reference' ? ' data-layer="TACK_REFERENCE" stroke-width=".35"' : ` stroke-dasharray="${r.type === 'tick' ? 'none' : r.type === 'seam' || r.type === 'fold' || r.type === 'inner-edge' ? '2 1' : r.type === 'outer-edge' ? '1 1' : '6 1 1 1'}"`}/>${r.arrow ? arrowTip(r.points) : ''}<text x="${fmt(r.labelPosition?.[0] ?? r.points[0][0] + 1)}" y="${fmt(r.labelPosition?.[1] ?? r.points[0][1] + 3)}" text-anchor="${r.textAnchor}" fill="#000" stroke="none" font-size="2.4">${xmlText(r.label)}</text>`).join('')}</g>`;
-  output += `<g data-layer="REMOVE_MARK" stroke-width="0.3">${t.holes.map(h => crossesAt(centroid(h))).join('')}</g></g>`;
+  output += `${t.holes.length?`<g data-layer="REMOVE_MARK" stroke-width="0.3">${t.holes.map(h => crossesAt(centroid(h))).join('')}</g>`:''}</g>`;
   if ((t.id === 'branch' || t.mapping?.coordinateSystem === 'branch-outer-wrap') && t.mapping?.paperTransform !== 'branch-mirror-x') {
     output += `<g data-layer="ANGLE_MARK" fill="#000" font-size="2.4"><text x="1" y="3">0° 起縫</text><text x="${fmt(t.width - 31)}" y="3">360° 同起縫</text><text x="${fmt(t.width / 2)}" y="5" text-anchor="middle">圓周弧長 →</text></g>`;
   } else if (t.id === 'main' && t.mapping?.hostType !== 'cone' && !t.mapping?.cropOrigin) {
@@ -254,6 +256,7 @@ export function fabricationReadiness(result) {
 
 /** UTF-8 BOM lets Excel on Windows detect Traditional Chinese correctly. */
 export function stationCSV(result) {
+  if(isSteelJoint(result)) {assertValidResult(result);return steelStationCSV(result);}
   assertValidResult(result);
   if (!Array.isArray(result.stationTable)) throw new Error('模型缺少圓周分點資料。');
   const csvCell = value => `"${String(value).replace(/"/g, '""')}"`;
@@ -370,6 +373,7 @@ function clipPolylineToRectangle(points, bounds) {
  * No crop may truncate a hole. This is a paper boundary, not a metal outer cut.
  */
 export function createMainOpeningPatch(result, options = {}) {
+  if(isSteelJoint(result))throw new Error('鋼構支材母管保持封閉；不產生母管開孔紙樣。');
   if(result?.params?.hostType==='cone')return createConicalOpeningPatch(result,options);
   if(result?.params?.hostType==='elbow')throw new Error('彎頭母孔使用分點定位工單，不能產生整片 1:1 包覆紙樣。');
   if (!plainObject(result) || result.valid !== true) throw new Error('請先產生有效的主管開孔模型。');
@@ -535,10 +539,12 @@ function branchPaper(template, result, options, local) {
 
 /** Full branch paper, with outward-facing handedness and separate open metal cut. */
 export function createBranchFieldTemplate(template, result, options = {}) {
+  if(isSteelJoint(result))throw new Error('鋼構支材請使用各材料面的放樣紙，不使用圓管魚口樣帶。');
   return branchPaper(template, result, options, false);
 }
 /** Short mouth paper. Locate its datum ring from the original free straight end. */
 export function createBranchCuttingWrap(result, options = {}) {
+  if(isSteelJoint(result))throw new Error('鋼構支材請選材料面紙樣。');
   if (!plainObject(result) || result.valid !== true) throw new Error('請先產生有效的支管模型。');
   const source = result.templates?.find(t => t.id === 'branch');
   if (!source) throw new Error('模型缺少支管樣板。');
@@ -658,6 +664,7 @@ function processNoteSheets(plan,paper){
 /** Exposed for the UI: the exact same plan is used by the report renderer. */
 export function reportPagePlan(result, options = {}) {
   assertValidResult(result);
+  if(isSteelJoint(result))return steelWorkOrderPagePlan(result,{...options,includeValidation:true});
   if(result.params.hostType==='cone'){
     const pages=conicalWorkOrderPages(result,options.metadata??{}, {...options,includeValidation:true}),rows=computeExactConicalStationTable(result,12);
     return {totalPages:pages.length,coverPages:1,notePages:pages.length-2,fabricationPages:0,stationPages:1,stationRowCount:rows.length,stationSheets:[{rows}],parts:[]};
@@ -742,6 +749,7 @@ function templateAxes(template) {
   return 'X→主管軸向；U↓主管周向';
 }
 function templateLegend(t) {
+  if(t.mapping?.branchKind==='steel'){const legend=steelTemplateLegend(t);if(legend)return legend;if(t.id==='steel-mother-datum')return '點劃線＝支材貼合足跡及定位十字；细點外框只裁紙；母管保持封閉，禁止沿足跡開孔';}
   if(t.mapping?.hostType==='cone'&&t.id.startsWith('main')&&t.mapping?.motherOpening===false)return '母材封閉；虛線＝貼合定位；細點框只裁紙；禁止依輪廓開孔';
   if(t.mapping?.hostType==='cone'&&t.id.startsWith('main'))return '孔口實線＝金屬切線；細點扇環／矩形只裁紙；外壁包覆紙樣，非鋼板落料';
   if (t.id==='branch-rough') return '粗實線＝成品外緣；長虛線 ROUGH_CUT＝粗切留料線；短虛線＝內緣；細點框只裁紙；T＝點固參考母線';
@@ -807,6 +815,7 @@ ${horizontalRuler(4, tileH + 3)}${verticalRuler(tileW + 3, 4)}
  * assemblySVG is accepted only as caller-generated trusted markup; never use imported text.
  */
 export function buildReportHTML(result, meta = {}, options = {}) {
+  if(isSteelJoint(result)){assertValidResult(result);return buildSteelWorkOrderHTML(result,meta,{...options,includeValidation:true});}
   if(result.params?.hostType==='cone')return buildConicalWorkOrderHTML(result,meta,{...options,includeValidation:true});
   if(result.params?.hostType==='elbow'){reportPagePlan(result,{...options,metadata:meta});return buildElbowWorkOrderHTML(result,meta,{...options,branchCount:options.stationCount??12,includeValidation:true});}
   const plan = reportPagePlan(result, options), p = plan.paper;
@@ -913,7 +922,7 @@ export function paperPatternPlan(result, options = {}) {
   // Compact header 14 mm + rulers 16 mm + paper/metal legend and footer clearance.
   paper.tileH=paper.contentH-50;
   const fabrication=options.fabrication===undefined?null:reconcileFitRecords(options.fabrication,result.params).plan;
-  const requested=options.parts??['branch-local'];
+  const requested=options.parts??(isSteelJoint(result)?result.templates.filter(t=>t.id.startsWith('steel-face-')).map(t=>t.id):['branch-local']);
   if(!Array.isArray(requested)||!requested.length)throw new Error('請選擇要印的零件。');
   if(requested.some(id=>typeof id!=='string'))throw new Error('紙樣零件代號必須為文字。');
   const canonical=id=>['branch','branch-local'].includes(id)?'branch-local':['main','main-local'].includes(id)?'main-local':id;
@@ -930,12 +939,13 @@ export function paperPatternPlan(result, options = {}) {
     if(['main','main-local'].includes(id))return cleanTemplate(createMainOpeningPatch(result));
     if(id==='main-conical'&&result.params.hostType==='cone'){const source=result.templates.find(t=>t.id==='main-conical'||t.id==='main');if(!source)throw new Error('缺少大小頭外壁扇環樣板。');return cleanTemplate({...source,id:'main-conical'});}
     const source=result.templates.find(t=>t.id===id);
+    if(source&&(id.startsWith('steel-face-')||id==='steel-mother-datum')&&isSteelJoint(result))return cleanTemplate(source);
     if(!source||!id.startsWith('pad'))throw new Error('所選紙樣已不在目前模型中。');
     return cleanTemplate(fieldTemplate(source,result));
   });
   const parts=selected.map((template,index)=>{
     const layout=paperPartLayout(template,paper,options.optimizePieces===true);
-    const prefix=ids[index]==='branch-rough'?'BR':ids[index]==='branch-local'?'B':ids[index]==='main-conical'?'MF':ids[index]==='main-local'?'M':ids[index]==='pad'?'P':`P${ids[index].slice(4).toUpperCase().replace(/[^A-Z0-9-]/g,'')||index+1}`;
+    const prefix=ids[index]==='steel-mother-datum'?'SM':ids[index].startsWith('steel-face-')?'S'+ids[index].slice(11):ids[index]==='branch-rough'?'BR':ids[index]==='branch-local'?'B':ids[index]==='main-conical'?'MF':ids[index]==='main-local'?'M':ids[index]==='pad'?'P':`P${ids[index].slice(4).toUpperCase().replace(/[^A-Z0-9-]/g,'')||index+1}`;
     return {template,partID:ids[index],prefix,...layout};
   });
   if(new Set(parts.map(part=>part.prefix)).size!==parts.length)throw new Error('紙樣零件代號重複，請分開列印。');
@@ -961,6 +971,14 @@ function paperPartLayout(template,paper,allowTurn){
 }
 
 export function paperPositionRecipe(template) {
+  if(template.mapping?.branchKind==='steel'){
+    const recipe=steelPaperPositionRecipe(template);if(recipe)return recipe;
+    if(template.id==='steel-mother-datum'){
+      const m=template.mapping,{A,B}=m.positioning??{};if(!A||!B)throw new Error('貼合定位紙樣缺少母材定位十字座標。');
+      const describe=(name,q)=>`${name}：${m.hostType==='cone'?`A 端沿母線 S ${fmt(q.slantDistance,2)} mm（軸距 X ${fmt(q.x,2)} mm）`:`距基準端 X ${fmt(q.x,2)} mm`}；所在截面从 0° 母線量 U ${fmt(q.circumferentialDistance,2)} mm／方位 ${fmt(q.phiDegrees,2)}°`;
+      return `母管保持封閉。建立 A 端與管頂 0° 母線；由 A 朝 B 看，0° 上、90° 左。${describe('A 十字',A)}；${describe('B 十字',B)}。文字面朝外，對準兩個十字后只描貼合定位虛線；十字不是鑽孔點，禁止沿足跡切除母管。`;
+    }
+  }
   const m=template.mapping??{};
   if(m.hostType==='cone'&&template.id.startsWith('main')){
     if(m.positioning?.A&&m.positioning?.B){const {A,B}=m.positioning;return `先建立母材 A 端與方位 0° 母線；沿錐面母線量距離後，在同一截面轉到指定方位。定位十字 A：母線 ${fmt(A.slant,2)} mm／方位 ${fmt(A.phiDegrees,2)}°；B：母線 ${fmt(B.slant,2)} mm／方位 ${fmt(B.phiDegrees,2)}°。文字面朝外，對準兩十字再描線。${m.motherOpening===false?'母材保持封閉，禁止開孔。':''}`;}
@@ -995,10 +1013,10 @@ function paperPrintDocument(paper,title,pages){
   return `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${xmlText(title)}</title><style>@page{size:${paper.width}mm ${paper.height}mm;margin:0}*{box-sizing:border-box}html,body{margin:0;padding:0;color:#000;font:3mm/1.5 "Microsoft JhengHei",Arial,sans-serif}body{background:#e7e7e7}.page{position:relative;width:${paper.width}mm;height:${paper.height}mm;padding:${paper.margin}mm;margin:6mm auto;background:#fff;break-after:page;page-break-after:always}.page:last-child{break-after:auto;page-break-after:auto}h1{font-size:5mm;line-height:1.2;margin:0 0 2mm}h2{font-size:3.7mm;margin:4mm 0 2mm}p{margin:2mm 0}header{margin-bottom:4mm;border-bottom:.35mm solid;padding-bottom:2mm}.tile-header{height:14mm;margin:0;padding:0;border:0;overflow:hidden}.tile-header h1{font-size:4.5mm;margin:0 0 1mm}.tile-header p{font-size:2.8mm;line-height:1.3;margin:0}.tile-svg{display:block;max-width:none}.tile-legend{font-size:2.7mm;margin:1mm 0;line-height:1.25}.guide-layout{display:grid;grid-template-columns:122mm 1fr;gap:6mm;align-items:start}.guide-layout svg{display:block}.guide-steps{margin:0;padding-left:5mm;font-size:3.1mm}.guide-steps li{margin-bottom:3mm}.calibration-box{border:.3mm solid;padding:3mm}.page-map{display:grid;gap:1mm;margin:2mm 0}.page-map span{border:.25mm solid;padding:1mm;text-align:center;font-size:3mm}.recipe{border:.3mm solid;padding:3mm;margin-top:4mm;font-size:3.2mm}.small{font-size:2.7mm}footer{position:absolute;left:${paper.margin}mm;right:${paper.margin}mm;bottom:5mm;border-top:.2mm solid;padding-top:1mm;font-size:2.5mm}footer span{float:right}.print-controls{position:sticky;top:0;z-index:2;text-align:center;background:white;padding:12px;font-size:14px;border-bottom:1px solid}.print-controls button{padding:8px 16px;margin-right:8px;cursor:pointer}@media print{body{background:#fff}.page{margin:0}.print-controls{display:none}*{print-color-adjust:exact;-webkit-print-color-adjust:exact}}</style></head><body><nav class="print-controls"><button onclick="window.print()">列印／儲存 PDF</button><span>${paper.paper} ${paper.orientation==='landscape'?'橫式':'直式'} · 實際尺寸 100% · 關閉頁首頁尾</span></nav>${pages.map((body,i)=>`<section class="page" data-page="${i+1}">${body}${footer(title,i+1,pages.length)}</section>`).join('\n')}</body></html>`;
 }
 export function buildPaperPatternHTML(result,meta={},options={}){
-  const plan=paperPatternPlan(result,options),p=plan.paper,id=String(meta.id??'未編號'),rev=String(meta.revision??'1'),pages=[];
+  const plan=paperPatternPlan(result,options),p=plan.paper,id=String(meta.id??'未編號'),rev=String(meta.revision??'1'),pages=[],steel=isSteelJoint(result),material=steel?`${result.geometry.steel.section.label} · ${result.params.branchSection==='chs'?`Ø${fmt(result.params.branchOD)} × t${fmt(result.params.branchWall)}`:`${fmt(result.geometry.steel.section.width)} × ${fmt(result.geometry.steel.section.height)}`} mm · 截面轉 ${fmt(result.params.sectionRotation)}° · 母管封閉`:`主管 Ø${fmt(result.params.mainOD)}／支管 Ø${fmt(result.params.branchOD)} mm · ${fmt(result.params.angle)}° · ${ENUM_LABELS[result.params.jointType]}`;
   if(plan.guidePages){
     const maps=plan.parts.map(part=>`<div><strong>${xmlText(part.prefix+' · '+part.template.title)}</strong>：${part.rows} 列 × ${part.columns} 欄，共 ${part.pageCount} 張${plan.parts.length===1&&part.rows<=3&&part.columns<=6?`<div class="page-map" style="grid-template-columns:repeat(${part.columns},1fr)">${part.tiles.map(tile=>`<span>${xmlText(tileCode(part,tile))}</span>`).join('')}</div>`:''}</div>`).join('');
-    pages.push(`<header><h1>先量 100 mm，再拼接貼管</h1><p>接頭 ${xmlText(id)} · 版次 ${xmlText(rev)} · 主管 Ø${fmt(result.params.mainOD)}／支管 Ø${fmt(result.params.branchOD)} mm · ${fmt(result.params.angle)}° · ${xmlText(ENUM_LABELS[result.params.jointType])}</p></header><div class="guide-layout"><div><div class="calibration-box"><strong>水平、垂直都要量到 100 mm</strong><svg xmlns="http://www.w3.org/2000/svg" width="114mm" height="116mm" viewBox="0 0 114 116">${horizontalRuler(4,4)}${verticalRuler(106,8)}<text x="8" y="40" font-size="4">實際尺寸／100%</text><text x="8" y="50" font-size="3.2">關閉「符合頁面」</text><text x="8" y="60" font-size="3.2">關閉瀏覽器頁首與頁尾</text><text x="8" y="88" font-size="3">此頁可不貼管；紙樣另頁。</text></svg></div><p class="small">拼接順序示意（非 1:1）</p>${maps}</div><div><ol class="guide-steps"><li><strong>量校正尺</strong><br>兩方向都正確，才用紙樣。</li><li><strong>只裁白邊</strong><br>保留圖形重疊區 ${p.overlap} mm。</li><li><strong>對同號圈十字</strong><br>重疊後黏好，保持線條連續。</li><li><strong>對基準，再包管</strong><br>先描線、試配與修磨。</li></ol><div class="recipe">${plan.parts.map(part=>`<p><strong>${xmlText(part.template.id.startsWith('branch')?'支管':part.template.id.startsWith('main')?'主管':part.template.title)}：</strong>${xmlText(paperPositionRecipe(part.template))}</p>`).join('')}</div></div></div>`);
+    pages.push(`<header><h1>先量 100 mm，再拼接${steel?'貼面':'貼管'}</h1><p>接頭 ${xmlText(id)} · 版次 ${xmlText(rev)} · ${xmlText(material)}</p></header><div class="guide-layout"><div><div class="calibration-box"><strong>水平、垂直都要量到 100 mm</strong><svg xmlns="http://www.w3.org/2000/svg" width="114mm" height="116mm" viewBox="0 0 114 116">${horizontalRuler(4,4)}${verticalRuler(106,8)}<text x="8" y="40" font-size="4">實際尺寸／100%</text><text x="8" y="50" font-size="3.2">關閉「符合頁面」</text><text x="8" y="60" font-size="3.2">關閉瀏覽器頁首與頁尾</text><text x="8" y="88" font-size="3">此頁可不貼管；紙樣另頁。</text></svg></div><p class="small">拼接順序示意（非 1:1）</p>${maps}</div><div><ol class="guide-steps"><li><strong>量校正尺</strong><br>兩方向都正確，才用紙樣。</li><li><strong>只裁白邊</strong><br>保留圖形重疊區 ${p.overlap} mm。</li><li><strong>對同號圈十字</strong><br>重疊後黏好，保持線條連續。</li><li><strong>對基準，再${steel?'貼對應材料面':'包管'}</strong><br>先描線、試配與修磨。</li></ol><div class="recipe">${plan.parts.map(part=>`<p><strong>${xmlText(part.template.id.startsWith('branch')?'支管':part.template.id.startsWith('main')?'主管':part.template.title)}：</strong>${xmlText(paperPositionRecipe(part.template))}</p>`).join('')}</div></div></div>`);
   }
   for(const part of plan.parts)for(const tile of part.tiles){const code=tileCode(part,tile),turned=part.printRotation===90?' · 圖形為省紙轉 90°，拼好後按定位環／箭頭貼管':'';pages.push(`<header class="tile-header"><h1>${xmlText(code)}　${xmlText(part.template.title)}　1:1</h1><p>接頭 ${xmlText(id)} · 版次 ${xmlText(rev)} · ${part.pageCount} 張中第 ${(tile.row-1)*part.columns+tile.column} 張 · ${part.rows} 列 × ${part.columns} 欄</p></header>${compactTileMarkup(part,tile,p,`paper-${pages.length+1}`)}<p class="tile-legend">${xmlText(templateLegend(part.template))}<br>沿細點頁框裁外白邊；同號十字疊合，保留 ${p.overlap} mm 圖形重疊。文字面朝外${xmlText(turned)}。</p>`);}
   return paperPrintDocument(p,`${id} · 1:1 貼管紙樣`,pages);
@@ -1056,6 +1074,7 @@ export function buildConicalWorkOrderHTML(result,meta={},options={}){
 }
 
 export function buildFieldWorkOrderHTML(result, meta = {}, options = {}) {
+  if(isSteelJoint(result)){assertValidResult(result);return buildSteelWorkOrderHTML(result,meta,options);}
   if(result.params?.hostType==='cone')return buildConicalWorkOrderHTML(result,meta,options);
   if(result.params?.hostType==='elbow')return buildElbowWorkOrderHTML(result,meta,options);
   assertValidResult(result);

@@ -4,6 +4,7 @@
  * In edge mode those coordinates specify a direction only. The distance is
  * recomputed from the outside radii, keeping the two same-side outlines flush.
  */
+import { sectionSupport } from './steel-sections.js';
 export const ELBOW_ALIGNMENT_MODES=Object.freeze(['free','a-axis','b-axis','a-offset','b-offset','a-edge','b-edge']);
 const rad=d=>d*Math.PI/180,deg=r=>r*180/Math.PI;
 const add=(a,b)=>a.map((v,i)=>v+b[i]);
@@ -22,7 +23,11 @@ function alignmentData(params){
   if(!mode.endsWith('-axis')){
     offset=Number(params.elbowOffset??0);sideOffset=Number(params.elbowSideOffset??0);
     if(mode.endsWith('-edge')){
-      const distance=(Number(params.mainOD)-Number(params.branchOD))/2,length=Math.hypot(offset,sideOffset);
+      const length=Math.hypot(offset,sideOffset),b=length===0?1:offset/length,z=length===0?0:sideOffset/length;
+      // sectionSupport includes the actual section rotation in its u/v plane.
+      // A projects +u to the port normal; B projects -u. Both project +v to Z.
+      const support=params.branchSection&&params.branchSection!=='pipe'?sectionSupport(params,[(end==='A'?1:-1)*b,z]):Number(params.branchOD)/2;
+      const distance=Number(params.mainOD)/2-support;
       if(!Number.isFinite(distance)||distance<0||!Number.isFinite(length))offset=sideOffset=NaN;
       else if(length===0){offset=distance;sideOffset=0;}
       else{offset=distance*(offset/length);sideOffset=distance*(sideOffset/length);}

@@ -19,7 +19,7 @@ const norm=value=>((value%360)+360)%360;
 export function settingPanelForField(field){
   if(typeof field!=='string')return 1;
   if(field.startsWith('fab.'))return 3;
-  if(['hostType','mainOD','mainEndOD','mainWall','mainLength','branchOD','branchWall','branchLength','bendAngle','bendRadius'].includes(field))return 0;
+  if(['hostType','mainOD','mainEndOD','mainWall','mainLength','branchOD','branchWall','branchLength','bendAngle','bendRadius','branchSection','sectionWidth','sectionHeight','sectionWall','sectionWeb','sectionFlange','sectionRadius','sectionSlope'].includes(field))return 0;
   if(field.startsWith('pad')||field==='kFactor')return 2;
   if(['tolerance','samples','autoPrecision'].includes(field))return 4;
   return 1;
@@ -100,7 +100,7 @@ export function normalizeFavoriteParams(raw={}){
   if(!HOSTS.includes(merged.hostType))throw new RangeError('母材型式無效。');
   if(!ELBOW_ALIGNMENT_MODES.includes(merged.elbowAlignment))throw new RangeError('端口定位方式無效。');
   connectionMode(merged);
-  for(const field of ['azimuth','surfaceClock','branchSwivel'])merged[field]=norm(merged[field]);
+  for(const field of ['azimuth','surfaceClock','branchSwivel','sectionRotation'])merged[field]=norm(merged[field]);
   if(merged.hostType==='elbow')merged=resolveElbowAlignment(merged);
   return Object.fromEntries(Object.keys(merged).sort().map(key=>[key,merged[key]]));
 }
@@ -132,5 +132,7 @@ export function favoriteSummary(raw){
   }
   const shape={circle:'圓形',ellipse:'橢圓',obround:'長圓',rounded:'圓角'}[p.padShape]??p.padShape;
   const pad=p.padEnabled?`${p.hostType==='elbow'?'成形':''}補強${shape}${p.padSplit==='single'?'單片':'雙片'}t${fmt(p.padThickness)}`:'無補強板';
-  return `${material}／支管${sizeLabel(p.branchOD)} · ${connection} · 壁${fmt(p.mainWall)}/${fmt(p.branchWall)}mm · ${location} · ${fmt(p.angle)}° · ${pad}`;
+  const steel=p.branchSection!=='pipe',labels={chs:'圓形鋼管',shs:'方管',rhs:'矩形管',h:'H 型鋼',i:'I 型鋼',l:'角鋼',c:'槽鋼'};
+  const branch=steel?`${labels[p.branchSection]??p.branchSection} ${p.branchSection==='chs'?sizeLabel(p.branchOD):`${fmt(p.sectionWidth)}×${fmt(p.sectionHeight)} mm`} · 轉${fmt(p.sectionRotation)}°`:`支管${sizeLabel(p.branchOD)}`;
+  return `${material}／${branch} · ${connection} · ${steel?`母壁${fmt(p.mainWall)}mm`:`壁${fmt(p.mainWall)}/${fmt(p.branchWall)}mm`} · ${location} · ${fmt(p.angle)}° · ${pad}`;
 }
