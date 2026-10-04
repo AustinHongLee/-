@@ -3,6 +3,7 @@
  * Every preset is a native button. Free point selection also exposes a keyboard
  * slider, and callers retain the existing exact numeric fields in a details fold.
  */
+import {elbowAlignmentReference,elbowAlignmentLabel} from './elbow-axis.js';
 const RAD=Math.PI/180, DEG=180/Math.PI;
 const esc=v=>String(v).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const fmt=(v,d=2)=>Number.isFinite(v)?Number(v.toFixed(d)).toString():'—';
@@ -57,7 +58,7 @@ export function elbowPlanLayout(p){
  const left=35+(250-(maxX-minX)*scale)/2,bottom=191-(158-(maxY-minY)*scale)/2;
  const point=(b,minor=0)=>{const q=physical(b,minor);return [left+(q[0]-minX)*scale,bottom-(q[1]-minY)*scale];};
  const fromPoint=q=>[(q.x-left)/scale+minX,(bottom-q.y)/scale+minY];
- return {R,r,g,scale,point,fromPoint};
+ return {R,r,g,scale,point,fromPoint,physicalToPoint:q=>[left+(q[0]-minX)*scale,bottom-(q[1]-minY)*scale]};
 }
 const polyPath=points=>points.map((q,i)=>`${i?'L':'M'}${q.map(v=>fmt(v,3)).join(' ')}`).join(' ');
 const elbowPath=(layout,r,reverse=false)=>polyPath(Array.from({length:49},(_,i)=>layout.point(layout.g*(reverse?48-i:i)/48,r)));
@@ -66,11 +67,11 @@ const safeBendValue=(value,p)=>{const end=Number(p.bendAngle),epsilon=Math.min(.
 export function elbowPositionPicker(p){
  const layout=elbowPlanLayout(p);if(!layout)return '<p class="visual-help">先填入有效管徑與彎曲半徑，才可點選位置。</p>';
  const b=Number(p.bendPosition)*RAD,q=layout.point(b),back=(layout.R+layout.r)*b,A=layout.point(0),B=layout.point(layout.g),aligned=(p.elbowAlignment??'free')!=='free';
- const label=aligned?'同軸已自動定位':'① 在彎頭上點選位置';
+ const label=aligned?'管口條件自動定位':'① 在彎頭上點選位置';
  const ring=polyPath([layout.point(b,-layout.r),layout.point(b,layout.r)]);
- let axis='';if(aligned){const contact=layout.point(b,layout.r),ref=p.elbowAlignment==='a-axis'?A:B;axis=`<path d="M${ref}L${contact}" stroke="#b3771f" stroke-width="2" stroke-dasharray="5 4"/>`;}
+ let axis='';if(aligned){const reference=elbowAlignmentReference(p),contact=layout.point(b,layout.r*Math.cos(p.surfaceClock*RAD)),ref=reference&&layout.physicalToPoint(reference.origin??reference.center);if(ref?.every(Number.isFinite)&&contact.every(Number.isFinite))axis=`<path d="M${ref}L${contact}" stroke="#b3771f" stroke-width="2" stroke-dasharray="5 4"/>`;}
  const controls=aligned?'':`<div class="visual-presets">${[[.25,'靠 A 端'],[.5,'彎頭中央'],[.75,'靠 B 端']].map(([f,t])=>`<button type="button" class="button" data-visual-field="bendPosition" data-visual-value="${fmt(p.bendAngle*f,8)}"${f===.5?' data-visual-intent="center"':''} aria-pressed="${Math.abs(p.bendPosition-p.bendAngle*f)<1e-8}">${t}</button>`).join('')}</div>`;
- return group(label,`<svg class="visual-map elbow-plan-map" viewBox="0 0 320 232" data-visual-map="elbow-position" ${aligned?'role="img"':`role="slider" tabindex="0" aria-label="彎頭插接截面；可點選弧線或按左右鍵調整" aria-valuemin="0" aria-valuemax="${p.bendAngle}" aria-valuenow="${fmt(p.bendPosition,6)}" aria-valuetext="A 端沿外背 ${fmt(back)} mm，截面 ${fmt(p.bendPosition)} 度"`}><path d="${elbowPath(layout,layout.r)}${elbowPath(layout,-layout.r,true).replace(/^M/,'L')}Z" fill="#e8eef5" stroke="#8198ae" stroke-width="1.6"/><path d="${elbowPath(layout,0)}" fill="none" stroke="#a5b6c6" stroke-dasharray="4 3"/><path d="${ring}" stroke="#1764ad" stroke-width="3"/>${axis}<circle cx="${q[0]}" cy="${q[1]}" r="6" fill="#1764ad" stroke="white" stroke-width="2"/><text x="${A[0]-17}" y="${A[1]+7}" class="visual-svg-label">A</text><text x="${B[0]+9}" y="${B[1]-10}" class="visual-svg-label">B</text><text x="160" y="222" text-anchor="middle" class="visual-svg-caption">藍線是所選截面；未表示孔形</text></svg>${controls}<output class="visual-readback">A 端沿外背 <strong>${fmt(back)} mm</strong> · 截面 ${fmt(p.bendPosition)}°</output>`,aligned?'金色虛線是 A／B 端中心線；改尺寸會自動重算。':'從 A 端往 B 端量；選在靠近端部處，仍需整個魚口留在母材內。');
+ return group(label,`<svg class="visual-map elbow-plan-map" viewBox="0 0 320 232" data-visual-map="elbow-position" ${aligned?'role="img"':`role="slider" tabindex="0" aria-label="彎頭插接截面；可點選弧線或按左右鍵調整" aria-valuemin="0" aria-valuemax="${p.bendAngle}" aria-valuenow="${fmt(p.bendPosition,6)}" aria-valuetext="A 端沿外背 ${fmt(back)} mm，截面 ${fmt(p.bendPosition)} 度"`}><path d="${elbowPath(layout,layout.r)}${elbowPath(layout,-layout.r,true).replace(/^M/,'L')}Z" fill="#e8eef5" stroke="#8198ae" stroke-width="1.6"/><path d="${elbowPath(layout,0)}" fill="none" stroke="#a5b6c6" stroke-dasharray="4 3"/><path d="${ring}" stroke="#1764ad" stroke-width="3"/>${axis}<circle cx="${q[0]}" cy="${q[1]}" r="6" fill="#1764ad" stroke="white" stroke-width="2"/><text x="${A[0]-17}" y="${A[1]+7}" class="visual-svg-label">A</text><text x="${B[0]+9}" y="${B[1]-10}" class="visual-svg-label">B</text><text x="160" y="222" text-anchor="middle" class="visual-svg-caption">藍線是所選截面；未表示孔形</text></svg>${controls}<output class="visual-readback">A 端沿外背 <strong>${fmt(back)} mm</strong> · 截面 ${fmt(p.bendPosition)}°</output>`,aligned?elbowAlignmentLabel(p)+'；金線為支管軸平面投影，改尺寸自動重算。':'從 A 端往 B 端量；選在靠近端部處，仍需整個魚口留在母材內。');
 }
 
 const elbowSides=[[0,'外背'],[45,'左上'],[90,'左側'],[135,'左下'],[180,'內腹'],[225,'右下'],[270,'右側'],[315,'右上']];
@@ -114,7 +115,7 @@ export function conePositionPicker(p){
 
 const anglePicture=angle=>{const a=angle*RAD,cx=72,cy=74,end=[cx+39*Math.cos(a),cy-39*Math.sin(a)];return svg(`<path d="M14 69H130V87H14Z" fill="#e8eef5" stroke="#8198ae"/><path d="M${cx} ${cy}L${end}" stroke="#7dc6ed" stroke-width="19"/><path d="M${cx} ${cy}L${end}" stroke="#1764ad" stroke-dasharray="4 3"/><path d="M18 97H126l-5 -3m5 3l-5 3" fill="none" stroke="#8198ae"/><text x="14" y="106" font-size="8" fill="#62758a">A／基準端</text><text x="130" y="106" text-anchor="end" font-size="8" fill="#62758a">B／遠端</text><text x="72" y="18" text-anchor="middle" fill="#1764ad">${angle}°</text>`);};
 export function branchAnglePicker(p){
- if(p.hostType==='elbow'&&(p.elbowAlignment??'free')!=='free')return `<output class="visual-readback">同軸自動角度 <strong>${fmt(p.angle,4)}°</strong></output>`;
+ if(p.hostType==='elbow'&&(p.elbowAlignment??'free')!=='free')return `<output class="visual-readback">${esc(elbowAlignmentLabel(p))} · 自動角度 <strong>${fmt(p.angle,4)}°</strong></output>`;
  return group('支管要直插，還是斜插？',`<div class="visual-card-grid visual-angle-grid">${[45,90,135].map(a=>card('angle',a,a===90?'正向插接':a===45?'斜向 B／遠端':'斜向 A／基準端',`${a}°`,anglePicture(a),Math.abs(p.angle-a)<1e-8)).join('')}</div>`,p.hostType==='elbow'?'角度以所選截面的母管切線為基準；側向旋轉可在精確設定中調整。':p.hostType==='cone'?'角度以插接處當地母線切線為基準；90° 是垂直錐面插接。側向旋轉可在精確設定中調整。':'角度以主管軸線為基準；90° 是垂直插接。');
 }
 

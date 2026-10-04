@@ -5,11 +5,12 @@ import { validateFabricationPlan, reconcileFitRecords, machiningBudget, fitPoint
 import { computeExactElbowStationTable } from './elbow-geometry.js';
 import { computeExactConicalStationTable,computeExactConicalLocatorTable,conicalDevelopmentToWorld } from './conical-geometry.js';
 import { buildElbowWorkOrderHTML,elbowWorkOrderPageRoles } from './elbow-field.js';
+import {ELBOW_ALIGNMENT_MODES} from './elbow-axis.js';
 export const PROJECT_FORMAT = 'pipe-fabrication-project';
 export const PROJECT_VERSION = 1;
 
 const PARAM_RULES = Object.freeze({
-  hostType:['straight','elbow','cone'],mainEndOD:'positive',elbowAlignment:['free','a-axis','b-axis'],motherOpening:'boolean',bendRadius:'positive',bendAngle:'bendAngle',bendPosition:'number',surfaceClock:'number',branchSwivel:'number',
+  hostType:['straight','elbow','cone'],mainEndOD:'positive',elbowAlignment:ELBOW_ALIGNMENT_MODES,elbowOffset:'number',elbowSideOffset:'number',motherOpening:'boolean',bendRadius:'positive',bendAngle:'bendAngle',bendPosition:'number',surfaceClock:'number',branchSwivel:'number',
   mainOD: 'positive', mainWall: 'positive', mainLength: 'positive', jointPosition: 'number',
   branchOD: 'positive', branchWall: 'positive', branchLength: 'positive', angle: 'angle',
   azimuth: 'number', offset: 'number', jointType: ['on', 'in'], projection: 'nonnegative',

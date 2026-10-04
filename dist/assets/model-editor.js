@@ -20,11 +20,11 @@ export class ModelEditor {
     this.overlay=document.createElement('div');this.overlay.className='model-handles';viewer.container.append(this.overlay);
     this.leaders=document.createElementNS('http://www.w3.org/2000/svg','svg');this.leaders.setAttribute('class','model-port-leaders');this.leaders.setAttribute('aria-hidden','true');this.overlay.append(this.leaders);
     this.handles={};
-    for(const [key,label] of [['A','沿 A 端中心線插管'],['B','沿 B 端中心線插管'],['position','拖曳接點移動位置'],['direction','拖曳藍色端點改變支管方向']]){
+    for(const [key,label] of [['A','A 端對齊設定：同軸、偏移或外沿齊線'],['B','B 端對齊設定：同軸、偏移或外沿齊線'],['position','拖曳接點移動位置'],['direction','拖曳藍色端點改變支管方向']]){
       const button=document.createElement('button');button.type='button';button.className='model-handle model-handle-'+key;button.dataset.modelHandle=key;button.setAttribute('aria-label',label);
       button.innerHTML=key==='position'?'<span class="handle-dot">＋</span><span>接點</span>':key==='direction'?'<span class="handle-dot">↗</span><span>拉方向</span>':`${key} 端`;
       this.overlay.append(button);this.handles[key]=button;
-      if(key==='A'||key==='B')button.addEventListener('click',()=>{if(this.enabled&&!this.busy&&this.currentParams()&&this.params?.hostType==='elbow'&&this.params.elbowAlignment!==key.toLowerCase()+'-axis')this.onAlign(key);});
+      if(key==='A'||key==='B')button.addEventListener('click',()=>{if(this.enabled&&!this.busy&&this.currentParams()&&this.params?.hostType==='elbow')this.onAlign(key);});
       else {button.addEventListener('pointerdown',event=>this.beginDrag(event,key));button.addEventListener('pointermove',event=>this.drag(event));button.addEventListener('pointerup',event=>this.endDrag(event));button.addEventListener('pointercancel',()=>this.cancelDrag());button.addEventListener('keydown',event=>{if(this.enabled&&!this.busy&&this.onKeyboard(key,event))event.preventDefault();});}
     }
     const canvas=viewer.renderer.domElement;
@@ -36,7 +36,7 @@ export class ModelEditor {
     canvas.addEventListener('pointerup',event=>{
       const tap=this.tap;this.tap=null;if(!this.enabled||this.modal||this.busy||!this.currentParams()||!tap||tap.id!==event.pointerId||tap.moved)return;
       const visibleHit=this.modelHit(event),part=this.pickPart(event,visibleHit);if(part){this.clearHover();this.onSelect?.(part);return;}
-      if(this.locked){this.onPreview('目前沿端口中心線鎖定。先選「自由定位」，再點管身。');return;}
+      if(this.locked){this.onPreview('目前沿管口方向定位。點管口改偏移，或選「自由定位」。');return;}
       const point=this.pick(event,true,visibleHit);if(!point)return;
       const patch=positionFromSurfacePoint(this.params,point.toArray());if(patch){this.preview(patch);this.onCommit(patch);}
     },true);
@@ -91,7 +91,7 @@ export class ModelEditor {
   }
   layout(){
     if(!this.overlay)return;
-    const active=this.enabled&&!this.modal&&!!this.frame&&!!this.host;
+    const active=this.enabled&&!this.modal&&!!this.host;
     const box=this.viewer.container.getBoundingClientRect(),camera=this.viewer.camera;camera.updateMatrixWorld();const layoutKey=JSON.stringify([active,box.width,box.height,camera.matrixWorld.elements,camera.projectionMatrix.elements,this.frame?.origin,this.tip,this.hostKey,this.locked,this.busy,this.params?.elbowAlignment]);if(layoutKey===this.layoutKey)return;this.layoutKey=layoutKey;
     this.viewer.model.traverse(item=>{if(item.isSprite)item.visible=!active;});
     this.overlay.hidden=!active;this.viewer.container.classList.toggle('direct-positioning',active);
@@ -101,6 +101,7 @@ export class ModelEditor {
     const placed={};
     const placeScreen=(key,q,size=null,write=true)=>{const button=this.handles[key];if(write)button.hidden=!q.visible;size??=measure(key);const hx=size.width/2+4,hy=size.height/2+4,x=Math.max(hx,Math.min(box.width-hx,q.x)),y=Math.max(hy,Math.min(box.height-hy,q.y+size.shift)),r={left:box.left+x-size.width/2,right:box.left+x+size.width/2,top:box.top+y-size.height/2,bottom:box.top+y+size.height/2,width:size.width,height:size.height};if(write){const left=`${x}px`,top=`${y}px`;if(button.style.left!==left)button.style.left=left;if(button.style.top!==top)button.style.top=top;placed[key]=r;}return r;};
     const place=(key,point)=>placeScreen(key,project(point));
+    if(this.frame&&this.tip){
     place('position',this.frame.origin);place('direction',this.tip);
     this.handles.position.disabled=this.busy;this.handles.direction.disabled=this.busy;
     const origin=new THREE.Vector3(...this.frame.origin),toward=origin.clone().sub(this.viewer.camera.position);this.group.updateMatrixWorld(true);
@@ -110,10 +111,11 @@ export class ModelEditor {
     const a=project(this.frame.origin),b=project(this.tip),stacked=Math.hypot(a.x-b.x,a.y-b.y)<52;
     if(stacked&&!this.handles.position.hidden){this.handles.direction.hidden=true;}
     this.overlayNote.hidden=this.locked||this.busy||!(occluded||stacked);this.overlayNote.textContent=occluded?'接點在背面 → 按「看接點」':stacked?'端點太靠近 → 放大或轉視角':'';
+    }else{this.handles.position.hidden=true;this.handles.direction.hidden=true;}
     const occupied=['position','direction'].filter(key=>!this.handles[key].hidden).map(key=>placed[key]);
     this.leaders.setAttribute('viewBox',`0 0 ${box.width} ${box.height}`);let leaders='';
     for(const end of hostEndFrames({...this.params,...this.draft})??[]){
-      const button=this.handles[end.id],selected=this.params.elbowAlignment===end.id.toLowerCase()+'-axis';button.disabled=this.busy||this.params.hostType!=='elbow';button.classList.toggle('locked-end',selected);button.setAttribute('aria-pressed',String(selected));const text=this.params.hostType==='elbow'?`${end.id} · 沿中心線`:`${end.id} 端`;if(button.textContent!==text)button.textContent=text;
+      const button=this.handles[end.id],selected=this.params.elbowAlignment?.startsWith(end.id.toLowerCase()+'-');button.disabled=this.busy||this.params.hostType!=='elbow';button.classList.toggle('locked-end',selected);button.setAttribute('aria-pressed',String(!!selected));const kind=this.params.elbowAlignment?.split('-')[1],text=this.params.hostType==='elbow'?`${end.id} · ${selected?{axis:'同軸',offset:'平行偏移',edge:'外沿齊線'}[kind]??'管口':'對齊設定'}`:`${end.id} 端`;if(button.textContent!==text)button.textContent=text;
       const q=project(end.center),out=project(end.center.map((v,i)=>v+end.outward[i]*this.params.mainOD/3)),len=Math.hypot(out.x-q.x,out.y-q.y)||1,dx=(out.x-q.x)/len,dy=(out.y-q.y)/len;
       // Keep port buttons beside their mouths and clear of the drag handles.
       const candidates=[[0,0],[dx*40,dy*40],[dx*70,dy*70],[-dy*90,dx*90],[dy*90,-dx*90],[dx*110,dy*110],[-90,-65],[90,-65],[-90,65],[90,65]];
@@ -131,7 +133,7 @@ export class ModelEditor {
   hover(event){
     this.clearHover();if(!this.enabled||this.modal||this.busy||this.dragging||this.multiTouch||event.pointerType==='touch'||!this.currentParams()||this.tap?.moved)return;
     const visibleHit=this.modelHit(event),part=this.pickPart(event,visibleHit);let text=part==='pad'?'點補強板 → 改板形、厚度與分片':part==='branch'?'點藍色支管 → 改外貼／內插接法':'';
-    if(!part&&this.locked){text='沿管口中心線鎖定；先按自由定位';}
+    if(!part&&this.locked){text='點管口改偏移／齊線；自由定位可解除條件';}
     if(!part&&!this.locked){const hit=this.pick(event,true,visibleHit),patch=hit&&positionFromSurfacePoint(this.params,hit.toArray()),frame=patch&&positioningFrame({...this.params,...patch});if(frame){const radius=Math.max(this.params.mainOD*.018,2.5);this.hoverRing.scale.setScalar(radius);this.hoverRing.position.set(...frame.origin.map((v,i)=>v+frame.normal[i]*radius*.12));this.hoverRing.quaternion.setFromUnitVectors(new THREE.Vector3(0,0,1),new THREE.Vector3(...frame.normal));this.hoverRing.visible=true;text='點這裡移接點';}}
     if(text){const box=this.viewer.container.getBoundingClientRect();this.hoverLabel.textContent=text;this.hoverLabel.hidden=false;this.hoverLabel.style.left=`${Math.max(8,Math.min(box.width-this.hoverLabel.offsetWidth-8,event.clientX-box.left+16))}px`;this.hoverLabel.style.top=`${Math.max(8,Math.min(box.height-this.hoverLabel.offsetHeight-8,event.clientY-box.top+18))}px`;this.viewer.renderer.domElement.style.cursor=part?'pointer':this.locked?'not-allowed':'crosshair';}this.viewer.render();
   }

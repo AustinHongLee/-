@@ -127,7 +127,7 @@ export class JointViewer {
       for(const phi of[0,Math.PI])this.line(Array.from({length:65},(_,i)=>torusSurfacePoint(e.bendAngle*i/64,phi,e.bendRadius,e.outerRadius+.3)),0x677e99,this.parts.main,true);
       const a=elbowFrame(0,e.bendRadius),end=elbowFrame(e.bendAngle,e.bendRadius),labelSize=Math.max(12,p.mainOD*.12);
       this.label('A 端',a.center.map((v,i)=>v-a.tangent[i]*labelSize*1.5),this.parts.main,labelSize);
-      if(axes.reference){const ref=axes.reference,len=b.axisEnd+p.mainOD,guide=this.line([ref.center,axes.branchOrigin.map((v,i)=>v+axes.branchDirection[i]*len)],0xffd16a,this.parts.main,true);guide.material.depthTest=false;guide.renderOrder=10;}
+      if(axes.reference){const ref=axes.reference,len=b.axisEnd+p.mainOD,guide=this.line([ref.origin??ref.center,axes.branchOrigin.map((v,i)=>v+axes.branchDirection[i]*len)],0xffd16a,this.parts.main,true);guide.material.depthTest=false;guide.renderOrder=10;if(ref.offsetDistance>0)this.line([ref.center,ref.origin],0xffd16a,this.parts.main,true);}
       this.label('B 端',end.center.map((v,i)=>v+end.tangent[i]*labelSize*1.5),this.parts.main,labelSize);
     } else if(p.hostType==='cone'){
       const c=result.geometry.conical;

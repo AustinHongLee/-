@@ -1,7 +1,7 @@
 import {rotateAroundMain} from './geometry.js';
 import {mainAxisSurfaceDatum,jointPositionForSurface} from './field-datums.js';
 import {elbowFrame,torusSurfacePoint,torusCoordinates} from './elbow-geometry.js';
-import {resolveElbowAlignment} from './elbow-axis.js';
+import {resolveElbowAlignment,ELBOW_ALIGNMENT_MODES} from './elbow-axis.js';
 import {conicalSurfacePoint} from './conical-geometry.js';
 
 /** Model controls use physical outside-surface entry points, not virtual
@@ -28,7 +28,7 @@ function hostShape(p){
   if(p.mainWall!==undefined&&(!Number.isFinite(p.mainWall)||p.mainWall<=0||p.mainWall>=R))return null;
   if(type==='straight')return Number.isFinite(p.mainLength)&&p.mainLength>0?{type,R,length:p.mainLength}:null;
   if(type==='elbow'){
-    if(!finite(p.bendRadius,p.bendAngle)||p.bendRadius<=R||p.bendAngle<=0||p.bendAngle>180||!['free','a-axis','b-axis'].includes(alignment(p)))return null;
+    if(!finite(p.bendRadius,p.bendAngle)||p.bendRadius<=R||p.bendAngle<=0||p.bendAngle>180||!ELBOW_ALIGNMENT_MODES.includes(alignment(p)))return null;
     return {type,R,Rc:p.bendRadius,bend:p.bendAngle*DEG};
   }
   if(type==='cone'){

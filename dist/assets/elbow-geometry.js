@@ -1,4 +1,4 @@
-import {resolveElbowAlignment,elbowAlignmentReference} from './elbow-axis.js';
+import {resolveElbowAlignment,elbowAlignmentReference,elbowAlignmentLabel,ELBOW_ALIGNMENT_MODES} from './elbow-axis.js';
 import {computeFormedElbowPad} from './formed-elbow-pad.js';
 /** Ideal finite circular elbow + straight branch, millimetres/degrees.
  * No dependency on the existing Site checkout. Torus coordinates are NOT an
@@ -8,7 +8,7 @@ export const DEFAULT_ELBOW_PARAMS=Object.freeze({hostType:'elbow',
   mainOD:200,mainWall:6,mainLength:600,jointPosition:300,
   branchOD:100,branchWall:4,branchLength:200,angle:90,jointType:'on',
   rootGap:0,holeGap:.5,projection:0,offset:0,azimuth:0,
-  bendRadius:304.8,bendAngle:90,bendPosition:45,surfaceClock:0,branchSwivel:0,elbowAlignment:'free',motherOpening:true,
+  bendRadius:304.8,bendAngle:90,bendPosition:45,surfaceClock:0,branchSwivel:0,elbowAlignment:'free',elbowOffset:0,elbowSideOffset:0,motherOpening:true,
   padEnabled:false,tolerance:.1,samples:360,autoPrecision:true});
 export const ELBOW_SAMPLE_CAP=4096;
 const TAU=Math.PI*2,EPS=1e-9,GUARD=1.1;
@@ -117,18 +117,23 @@ export function torusLineIntersections(foot,direction,bendRadius,tubeRadius) {
 
 function validate(raw) {
   const p=resolveElbowAlignment({...DEFAULT_ELBOW_PARAMS,...raw}),errors=[],error=(field,message)=>errors.push({field,message});
+  const shifted=['a-offset','b-offset','a-edge','b-edge'].includes(p.elbowAlignment);
   for(const field of ['mainOD','mainWall','branchOD','branchWall','branchLength','angle','rootGap','holeGap','projection',
-    'bendRadius','bendAngle','bendPosition','surfaceClock','branchSwivel','tolerance','samples']) {
-    p[field]=Number(p[field]);if(!Number.isFinite(p[field]))error(field,'請輸入有限數值。');
+    'bendRadius','bendAngle','bendPosition','surfaceClock','branchSwivel','elbowOffset','elbowSideOffset','tolerance','samples']) {
+    p[field]=Number(p[field]);if(!Number.isFinite(p[field])&&!(shifted&&['angle','bendPosition','surfaceClock','branchSwivel'].includes(field)))error(field,'請輸入有限數值。');
   }
+  const oversizedEdge=['a-edge','b-edge'].includes(p.elbowAlignment)&&p.branchOD>p.mainOD;
+  if(shifted&&!oversizedEdge&&Number.isFinite(p.elbowOffset)&&Number.isFinite(p.elbowSideOffset)&&['angle','bendPosition','surfaceClock','branchSwivel'].some(field=>!Number.isFinite(p[field])))
+    error('elbowOffset','所選偏移軸線沒有穩定的彎頭外壁交點，可能已越出外壁或接近相切；請調整外背與側向偏移。');
+  if(oversizedEdge)error('branchOD','同側外輪廓齊線需支管外徑不大於母管外徑。');
   for(const f of ['mainOD','mainWall','branchOD','branchWall','branchLength','bendRadius','tolerance'])if(p[f]<=0)error(f,'尺寸必須大於 0。');
   if(p.mainWall*2>=p.mainOD)error('mainWall','主管壁厚須小於外徑的一半。');
   if(p.branchWall*2>=p.branchOD)error('branchWall','支管壁厚須小於外徑的一半。');
   if(p.bendRadius<=p.mainOD/2+p.rootGap)error('bendRadius','理想環面需彎曲中心半徑大於管外半徑與間隙。');
   if(p.bendAngle<=0||p.bendAngle>180)error('bendAngle','此版支援大於 0° 至 180° 的有限彎頭。');
-  if(p.bendPosition<=0||p.bendPosition>=p.bendAngle)error('bendPosition','接頭中心須位於彎頭兩端之間。');
+  if(p.bendPosition<=0||p.bendPosition>=p.bendAngle)error(shifted?'elbowOffset':'bendPosition',shifted?'偏移軸線的接點已超出有限彎頭兩端；請調整偏移量。':'接頭中心須位於彎頭兩端之間。');
   if(p.elbowAlignment==='free'?(p.angle<5||p.angle>175):(p.angle<=0||p.angle>=180))error('angle','支管與當地切線夾角不在有效範圍。');
-  if(!['free','a-axis','b-axis'].includes(p.elbowAlignment))error('elbowAlignment','請選有效的中心線定位方式。');
+  if(!ELBOW_ALIGNMENT_MODES.includes(p.elbowAlignment))error('elbowAlignment','請選有效的端口定位方式。');
   if(typeof p.motherOpening!=='boolean')error('motherOpening','母管開孔設定須為布林值。');
   if(!p.motherOpening&&(p.jointType!=='on'||p.projection!==0))error('jointType','母管封閉的支撐管只支援外焊貼合，內插須啟用開孔。');
   for(const f of ['rootGap','holeGap','projection'])if(p[f]<0)error(f,'間隙與伸入量不可小於 0。');
@@ -371,7 +376,7 @@ function build(raw) {
       '未包含坡口、刀縫、焊接收縮、彎頭橢圓度或實測形變。',
       '彎頭壁厚方向交線未具全域凸性；此版不提供粗切留料包絡。',
       ...(opening?[]:['外焊支撐：母管保持封閉，貼合定位輪廓不得當母管開孔切線。']),
-      ...(p.elbowAlignment==='free'?[]:[`${p.elbowAlignment==='b-axis'?'B':'A'} 端中心線與支管軸線重合，延伸方向由同軸條件計算。`])],
+      ...(p.elbowAlignment==='free'?[]:[`${elbowAlignmentLabel(p)}；位置與方向依所選端口基準反算。`])],
     mapping:{coordinateSystem:'branch-outer-wrap',circumference:C,axisEnd:endT,origin:[0,0],hostType:'elbow'}};
   const locator=(q,minor)=>({betaDegrees:q.beta*180/Math.PI,phiDegrees:unwrap(q.phi,model.phi)*180/Math.PI,
     centerlineDistance:model.Rc*q.beta,backSpineDistance:(model.Rc+minor)*q.beta,
@@ -399,8 +404,14 @@ function build(raw) {
     {id:'chord',label:'採樣弦差（含數值餘量）',value:chord,unit:'mm',tolerance:p.tolerance,status:chord<=p.tolerance?'pass':'warning'},
     {id:'wall-collision',label:model.normalExtrados?'外背法線管身解析排除干涉／伸入探查':'有限管身壁厚探查',
       value:wallChecks,unit:'samples',tolerance:0,status:'pass',basis:model.normalExtrados?'analytic-extrados-radial-monotonicity':'finite-probes'}];
-  if(reference){const v=sub(model.origin,reference.center),along=dot(v,reference.direction),axisDistance=norm(sub(v,mul(reference.direction,along))),axisAngle=Math.atan2(norm(cross(model.d,reference.direction)),dot(model.d,reference.direction))*180/Math.PI;
-    verification.push({id:'axis-distance',label:`支管與 ${reference.end} 端中心線同軸距離`,value:axisDistance,unit:'mm',tolerance:p.tolerance,status:axisDistance<=p.tolerance?'pass':'fail'},{id:'axis-direction',label:`支管與 ${reference.end} 端延伸方向偏差`,value:axisAngle,unit:'°',tolerance:1e-7,status:axisAngle<=1e-7?'pass':'fail'});
+  if(reference){const v=sub(model.origin,reference.origin??reference.center),along=dot(v,reference.direction),axisDistance=norm(sub(v,mul(reference.direction,along))),axisAngle=Math.atan2(norm(cross(model.d,reference.direction)),dot(model.d,reference.direction))*180/Math.PI;
+    const coaxial=p.elbowAlignment.endsWith('-axis');
+    verification.push({id:'axis-distance',label:coaxial?`支管與 ${reference.end} 端中心線同軸距離`:`支管與 ${reference.end} 端指定偏移軸線距離`,value:axisDistance,unit:'mm',tolerance:p.tolerance,status:axisDistance<=p.tolerance?'pass':'fail'},{id:'axis-direction',label:`支管與 ${reference.end} 端延伸方向偏差`,value:axisAngle,unit:'°',tolerance:1e-7,status:axisAngle<=1e-7?'pass':'fail'});
+    if(p.elbowAlignment.endsWith('-edge')){
+      const length=Math.hypot(p.elbowOffset,p.elbowSideOffset),back=length?p.elbowOffset/length:1,side=length?p.elbowSideOffset/length:0,
+        outlineError=Math.abs(reference.offset*back+reference.sideOffset*side+model.ro-model.R);
+      verification.push({id:'edge-alignment',label:`支管與 ${reference.end} 端同側外輪廓齊線誤差`,value:outlineError,unit:'mm',tolerance:p.tolerance,status:outlineError<=p.tolerance?'pass':'fail'});
+    }
   }
   warnings.push(model.normalExtrados?
     '彎頭採理想環面；外背法線管身以單調距離排除再入壁，伸入餘裕仍用有限壁厚站探查；現場成形偏差與全壁厚粗切包絡未納入。':

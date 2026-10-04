@@ -2,6 +2,7 @@
 import {computeExactElbowStationTable,computeExactElbowLocatorTable} from './elbow-geometry.js';
 import {validateFabricationPlan,reconcileFitRecords,fitPointStatus,fitPhaseStatus} from './fabrication-plan.js';
 import {buildElbowPadPageBodies} from './elbow-pad-field.js';
+import {elbowAlignmentLabel,elbowAlignmentReference} from './elbow-axis.js';
 const TAU=2*Math.PI;
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const fmt=(n,d=3)=>Number.isFinite(n)?Number(n.toFixed(d)).toString():'—';
@@ -12,7 +13,11 @@ function text(x,y,s,attributes=''){return`<text x="${fmt(x)}" y="${fmt(y)}" ${at
 function path(points){return points.map((p,i)=>`${i?'L':'M'}${fmt(p[0],6)},${fmt(p[1],6)}`).join(' ');}
 function rowCount(value,fallback){const n=value??fallback;if(!Number.isInteger(n)||n<4||n>720)throw new Error('工單分點區段須為 4 至 720 的整數。');return n;}
 const motherClosed=result=>result.params.motherOpening===false;
-function alignmentLabel(params){return params.elbowAlignment==='b-axis'?'B端同軸延伸（軸線重合且方向鎖定）':params.elbowAlignment==='a-axis'?'A端同軸延伸（軸線重合且方向鎖定）':'自由方位';}
+function alignmentLabel(params){
+  const ref=elbowAlignmentReference(params);if(!ref)return '自由方位';
+  if(params.elbowAlignment.endsWith('-axis'))return `${ref.end}端同軸延伸（軸線重合且方向鎖定）`;
+  return `${elbowAlignmentLabel(params)}；相對 ${ref.end} 管口中心線的垂直偏移 ${fmt(ref.offsetDistance)} mm（在該管口端面量；外背為正、側向 +Z 為正）${params.elbowAlignment.endsWith('-edge')?'；同側外輪廓以兩管實際外半徑齊線，方向輸入不另增加偏移距離':''}`;
+}
 /** Same cross-section point, measured from the extrados by its shorter arc.
  * A-to-B view with extrados up: increasing phi is left, decreasing is right. */
 export function elbowShortArcMeasurement(result,row){
@@ -66,7 +71,7 @@ function pageBodies(result,options={}){
   const setup=p.jointType==='in'?`內插凸入量 ${fmt(p.projection)} mm（從近側內壁沿支管軸）；孔口每側間隙 ${fmt(p.holeGap)} mm。`:`貼合徑向間隙 ${fmt(p.rootGap)} mm。${closed?'母管保持封閉。':`孔口每側間隙 ${fmt(p.holeGap)} mm。`}`;
   chunk(branch,13).forEach((rows,i)=>pages.push({role:'branch',title:i?'支管成品分點（續）':closed?'外焊支撐支管成品分點工單':'直支管成品分點工單',body:`<p>${esc(dimensions)}</p><p>${esc(angles)}</p><p>${esc(setup)}</p><p class="notice">從同一自由直端沿支管軸量深度；先畫 D=${fmt(D)} mm 定位環，再由環量各點偏移。從自由端朝接頭看，0° 沿 −當地切線的截面投影，站角順時針增加。</p>${i?'':branchIndex(result,branch,D)}<table><thead><tr><th>角度 °</th><th>外周距 mm</th><th>外緣深度 mm</th><th>外緣距 D mm</th><th>內緣深度 mm</th><th>內緣距 D mm</th></tr></thead><tbody>${rows.map(q=>`<tr data-station-angle="${fmt(q.angle)}"><td>${fmt(q.angle)}</td><td>${fmt(q.circumference,d)}</td><td>${fmt(q.outerDepth,d)}</td><td>${fmt(q.outerDepth-D,d)}</td><td>${fmt(q.innerDepth,d)}</td><td>${fmt(q.innerDepth-D,d)}</td></tr>`).join('')}</tbody></table><p class="note">分點座標為精確角度求交。表中點間直線不是精細裁線；支管另印 1:1 外徑包覆 fishmouth 樣板，並修磨內、外成品緣。內緣是同角度參考，不能當內徑包覆展開。</p><p class="note">理想圓形彎頭與直圓支管；未含現場橢圓度、坡口、刀縫或焊接收縮。${p.padEnabled?'已成形補強板另附曲面定位頁；不提供平板展開。':'此版未啟用彎頭補強板。'}不提供粗切全壁厚留料包絡。</p>`}));
   const estimate=motherPolylineEstimate(result,motherCount,mother);
-  const axisText=p.elbowAlignment==='b-axis'?'B端同軸延伸':p.elbowAlignment==='a-axis'?'A端同軸延伸':'自由方位';
+  const axisText=alignment;
   const motherDimensions=`母管 Ø${fmt(p.mainOD)}×${fmt(p.mainWall)}；支管 Ø${fmt(p.branchOD)}×${fmt(p.branchWall)} mm；R=${fmt(p.bendRadius)} mm；彎角 ${fmt(p.bendAngle)}°；β=${fmt(p.bendPosition)}°／φ=${fmt(p.surfaceClock)}°；${axisText}；${closed?'母管不開孔':p.jointType==='on'?'外貼開孔':'開孔內插'}。`;
   chunk(mother,25).forEach((rows,i)=>pages.push({role:'mother',title:closed?(i?'彎頭貼合定位（續）':'彎頭貼合定位工單'):(i?'彎頭母孔分點（續）':'彎頭母孔分點定位工單'),body:`<p>${esc(motherDimensions)}</p><p class="notice">${closed?'母管不開孔；足跡只供貼合標記，禁止依輪廓切除母管。':'表列母管外壁孔口。'}定位索引圖不是整片 1:1 展開。從 A 端量 S背，再於同一截面從外背沿箭頭量 U。</p>${i?'':elbowLocatorSVG(result,mother)}<table class="mother-table"><thead><tr><th>點</th><th>β °</th><th>S背 mm</th><th>S腹 mm</th><th>φ °</th><th>U mm</th><th>省力量法 mm</th></tr></thead><tbody>${rows.map(q=>`<tr><td>${q.station+1}</td><td>${fmt(q.betaDegrees,4)}</td><td>${fmt(q.rearDistance,d)}</td><td>${fmt(q.bellyDistance,d)}</td><td>${fmt(q.phiDegrees,4)}</td><td>${fmt(q.circumference,d)}</td><td>${esc(elbowShortArcMeasurement(result,q).label)}</td></tr>`).join('')}</tbody></table><p class="note">S背／S腹從 A 端量，U 從外背逆時針量；省力欄沿左／右短弧定位同點。0 與 ${fmt(Math.PI*p.mainOD,d)} mm 為同點。</p><p class="note">用背／腹兩點和治具校正同截面；捲尺須垂直當地中心線。由 A 朝 B 看、外背在上：90° 左，270° 右。</p><p class="note">${motherCount} 區段僅作定位；點間硬連直線的 3D 密採偏差估計約 ${fmt(estimate,5)} mm（含 1.1 餘量），不保證達到核心 ${fmt(p.tolerance,5)} mm 公差。需加點／依 3D 核對修磨。${closed?'表列支管外緣貼合足跡；母管保持封閉，支管內外緣另修磨。':'表列外壁孔口；內緣與壁厚配合 3D，不能沿外壁法線直接割穿當貫穿刀路。'}</p>`}));
   if(result.geometry.pad)pages.push(...buildElbowPadPageBodies(result,options));

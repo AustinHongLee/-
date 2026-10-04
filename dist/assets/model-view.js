@@ -1,7 +1,7 @@
 import {positioningFrame} from './model-positioning.js';
 import {mainAxisSurfaceDatum} from './field-datums.js';
 import {elbowEntryDimensions} from './elbow-input.js';
-import {resolveElbowAlignment} from './elbow-axis.js';
+import {resolveElbowAlignment,elbowAlignmentLabel} from './elbow-axis.js';
 
 const dot=(a,b)=>a.reduce((sum,v,i)=>sum+v*b[i],0);
 const unit=v=>{const length=Math.hypot(...v);return length>1e-12&&Number.isFinite(length)?v.map(x=>x/length):null;};
@@ -48,7 +48,7 @@ export function modelPointReadback(params){
   }
   if(type==='elbow'){
     const p=resolveElbowAlignment(params),entry=elbowEntryDimensions(p);
-    return {position:`A 起 S背 ${fmt(entry.back)} mm · ${clockText(p.surfaceClock,true)}`,angle:p.elbowAlignment&&p.elbowAlignment!=='free'?`沿 ${p.elbowAlignment==='a-axis'?'A':'B'} 端中心線`:`與截面切線 ${fmt(p.angle)}° · 側轉 ${fmt(p.branchSwivel)}°`};
+    return {position:`A 起 S背 ${fmt(entry.back)} mm · ${clockText(p.surfaceClock,true)}`,angle:p.elbowAlignment&&p.elbowAlignment!=='free'?(p.elbowAlignment.endsWith('-axis')?`沿 ${p.elbowAlignment.startsWith('a-')?'A':'B'} 端中心線`:elbowAlignmentLabel(p)):`與截面切線 ${fmt(p.angle)}° · 側轉 ${fmt(p.branchSwivel)}°`};
   }
   return {position:`A 起 X ${fmt(params.jointPosition)} mm · ${clockText(params.surfaceClock)}`,angle:`與母線 ${fmt(params.angle)}° · 側轉 ${fmt(params.branchSwivel)}°`};
 }

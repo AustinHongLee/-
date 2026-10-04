@@ -3,7 +3,7 @@
  * contain fabrication measurements, metadata, pipe sizes, or position settings.
  */
 import {DEFAULT_PARAMS} from './joint-model.js';
-import {resolveElbowAlignment} from './elbow-axis.js';
+import {resolveElbowAlignment,elbowAlignmentLabel,ELBOW_ALIGNMENT_MODES} from './elbow-axis.js';
 import {ASME_PIPE_SIZES} from './pipe-sizes.js';
 import {mainAxisSurfaceDatum} from './field-datums.js';
 
@@ -98,6 +98,7 @@ export function normalizeFavoriteParams(raw={}){
     merged[key]=value;
   }
   if(!HOSTS.includes(merged.hostType))throw new RangeError('母材型式無效。');
+  if(!ELBOW_ALIGNMENT_MODES.includes(merged.elbowAlignment))throw new RangeError('端口定位方式無效。');
   connectionMode(merged);
   for(const field of ['azimuth','surfaceClock','branchSwivel'])merged[field]=norm(merged[field]);
   if(merged.hostType==='elbow')merged=resolveElbowAlignment(merged);
@@ -123,7 +124,7 @@ export function favoriteSummary(raw){
     p.hostType==='elbow'?`彎頭${fmt(p.bendAngle)}° ${sizeLabel(p.mainOD)}`:`直管 ${sizeLabel(p.mainOD)}`;
   let location;
   if(p.hostType==='elbow')location=p.elbowAlignment==='free'?`A起${fmt(p.bendPosition)}°／側${fmt(p.surfaceClock)}°`:
-    `${p.elbowAlignment==='b-axis'?'B':'A'}端同軸`;
+    p.elbowAlignment.endsWith('-axis')?`${p.elbowAlignment.startsWith('b-')?'B':'A'}端同軸`:elbowAlignmentLabel(p);
   else if(p.hostType==='cone')location=`A起X${fmt(p.jointPosition)}／側${fmt(p.surfaceClock)}°`;
   else {
     const d=mainAxisSurfaceDatum(p);
