@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="description" content="平面與立體 offset 配管：計算直管裁切長、反算彎頭角度，列印彎頭切角分點工單與 1:1 量尺。">
+  <title>偏移配管與彎頭切角 · 特殊工法工作台</title>
+  <link rel="stylesheet" href="assets/styles.css"><link rel="stylesheet" href="assets/offset.css">
+  <link rel="stylesheet" href="assets/workbench.css">
+  <script type="importmap">{"imports":{"three":"./assets/vendor/three.module.js","three/addons/controls/OrbitControls.js":"./assets/vendor/OrbitControls.js"}}</script>
+</head>
+<body class="offset-page">
+  <section id="workbench-startup" class="workbench-startup" role="status"><div><p class="workbench-eyebrow">特殊工法工作台</p><h1 id="boot-title">正在開啟偏移配管…</h1><p id="boot-message">正在載入計算、圖面與操作功能。</p><p id="boot-guide" hidden>請回到專案資料夾，雙擊「啟動工作台.cmd」，再從首頁選工具。</p><div class="boot-actions"><a id="boot-open" class="workbench-button" hidden>開啟完整工具</a><button id="boot-retry" class="workbench-button" type="button" hidden>重新載入</button><a id="boot-home" class="workbench-button secondary" href="index.html" hidden>回到工具首頁</a></div><details id="boot-details" hidden><summary>載入問題</summary><p id="boot-error"></p></details><noscript><p>瀏覽器須啟用 JavaScript，才能計算尺寸與操作圖面。</p></noscript></div></section>
+  <div id="workbench-tool" class="workbench-tool" data-tool="offset" inert>
+  <header class="workflow-header"><a class="workflow-brand" href="./">工 <span>特殊工法工作台</span></a><details class="project-menu"><summary>專案</summary><div><button class="button" id="save-offset">儲存專案</button><button class="button" id="load-offset">載入專案</button><input id="offset-file" type="file" accept=".json,application/json" hidden><p id="project-restored"></p></div></details></header>
+  <nav class="workbench-nav" aria-label="選擇工具"><a href="index.html">工具首頁</a><a href="joint.html">插管／支材</a><a href="offset.html" aria-current="page">偏移配管</a><a href="tank.html">桶槽估料</a></nav>
+  <main class="offset-workspace">
+    <div class="workflow-title"><div><p class="offset-eyebrow">OFFSET PIPE</p><h1>偏移配管</h1></div><p>把兩個管口接起來。</p></div>
+    <nav class="workflow-steps" aria-label="加工流程"><button type="button" data-step="1" aria-current="step"><span>1</span>量端口</button><button type="button" data-step="2"><span>2</span>選接法</button><button type="button" data-step="3"><span>3</span>看加工單</button></nav>
+    <div id="offset-errors" class="recovery-summary" role="alert" hidden></div>
+    <section data-stage="1" aria-labelledby="measure-title">
+      <div class="workflow-stage-head"><h2 id="measure-title">先量兩個端口的距離</h2><p>點圖操作，尺寸用 mm。</p></div>
+      <form id="offset-inputs" novalidate>
+        <div class="workflow-input-grid">
+          <section class="workflow-card port-scene-card"><div class="scene-heading"><h3>量兩個管口</h3><span>點圖修改</span></div><div class="scene-view-tabs" role="group" aria-label="量測視角"><button type="button" data-scene-view="iso" aria-pressed="true">立體</button><button type="button" data-scene-view="front">正視</button><button type="button" data-scene-view="top">俯視</button><button type="button" data-scene-view="side">側視</button></div><div id="port-sketch" class="port-sketch"></div><p id="port-scene-hint" class="scene-hint">點尺寸填數值 · 點 A／B 選朝向 · 拖 B 調位置</p></section>
+          <section class="workflow-card input-editor"><nav class="input-editor-tabs" aria-label="現場設定"><button type="button" data-editor-tab="position" aria-pressed="true">端口位置</button><button type="button" data-editor-tab="stock">彎頭材料</button><button type="button" data-editor-tab="gaps">焊口留料</button></nav><section id="offset-repair" class="recovery-card" aria-live="polite" hidden></section><div data-editor-panel="position"><h3>從 A 口量到 B 口</h3>            <div class="fields-grid xyz-fields">
+              <div class="field" id="run-field"><label for="offset-run">X 前後 mm</label><input id="offset-run" name="run" type="number" step="any" inputmode="decimal" value="800"></div>
+              <div class="field" id="roll-field"><label for="offset-roll">Y 左右 mm</label><input id="offset-roll" name="roll" type="number" step="any" inputmode="decimal" value="0"></div>
+              <div class="field"><label for="offset-rise" id="rise-label">Z 高低 mm</label><input id="offset-rise" name="rise" type="number" step="any" inputmode="decimal" value="500"></div>
+              <div class="field" id="angle-field" hidden><label for="offset-angle">彎頭角度 °</label><input id="offset-angle" name="angle" type="number" step="any" inputmode="decimal" value="45"></div>
+            </div><p class="field-note">前／右／上為正值；反方向填負值。</p>
+
+<div id="orientation-presets" class="orientation-presets"></div><div id="endpoint-choices" class="endpoint-choices"></div><section id="direction-picker" hidden><div class="direction-picker-head"><h4 id="direction-picker-title">A 口朝哪裡？</h4><button type="button" class="button" id="close-direction-picker">完成</button></div><div id="direction-options" class="direction-options"></div></section>            <details class="workflow-advanced" id="measurement-details"><summary>其他量測方式／精確朝向</summary><div id="port-orientation-fields" class="port-directions"></div>
+              <div class="field"><label for="offset-basis">量測基準</label><select id="offset-basis" name="basis"><option value="ports">既有管口端面</option><option value="intersections">中心線的理論交點</option></select></div>
+              <div class="offset-choice"><label><input type="radio" name="layout" value="rolling" checked>立體 X／Y／Z</label><label><input type="radio" name="layout" value="planar">平面 X／Z</label></div>
+              <div id="port-datum-fields"><div class="field"><label for="offset-datum">管口量測點</label><select id="offset-datum" name="datum"><option value="center">端面中心</option><option value="marks">邊緣／標記點，修正至中心</option></select></div><div id="port-shift-fields" hidden></div></div>
+              <div id="legacy-solve-fields" hidden><div class="field"><label for="offset-solve">已知尺寸</label><select id="offset-solve" name="solve"><option value="run">固定位置，反算角度</option><option value="angle">已知角度，計算管長</option></select></div></div>
+              <p class="offset-help" id="measurement-help"></p>
+            </details>
+          </div><div data-editor-panel="stock" hidden><h3>手邊有哪些材料？</h3>            <div class="fields-grid"><div class="field"><label for="offset-nps">管徑（吋）</label><select id="offset-nps"></select></div><div class="field"><label for="offset-od">實際外徑 mm</label><input id="offset-od" name="od" type="number" step="any" inputmode="decimal" value="114.3"></div></div>
+            <label class="workflow-check"><input id="offset-same-stock" type="checkbox" checked>A、B 用相同的彎頭供料</label>
+            <div class="stock-section"><h4 id="stock-a-title">兩端彎頭</h4><div id="elbow-a-fields"></div></div>
+            <div class="stock-section" id="stock-b-section" hidden><h4>B 端彎頭</h4><div id="elbow-b-fields"></div></div>
+</div><div data-editor-panel="gaps" hidden><h3>焊接要留多少？</h3><div id="weld-sketch" class="weld-sketch"></div>            <div class="field gap-field"><label for="offset-all-gap">各焊口預留間隙 mm</label><input id="offset-all-gap" type="number" step="any" inputmode="decimal" value="0"><small id="gap-shared-note">依現場工法／WPS 填寫。</small></div>
+            <details class="workflow-advanced" id="port-allowances"><summary>各別間隙、留料與管段下限</summary><div class="fields-grid">
+              <div class="field" id="gap-g1"><label for="offset-aPortGap">G1 · 既有 A 口 mm</label><input id="offset-aPortGap" name="aPortGap" type="number" step="any" inputmode="decimal"></div>
+              <div class="field"><label for="offset-aGap">G2 · A 彎頭接直管 mm</label><input id="offset-aGap" name="aGap" type="number" step="any" inputmode="decimal"></div>
+              <div class="field"><label for="offset-bGap">G3 · 直管接 B 彎頭 mm</label><input id="offset-bGap" name="bGap" type="number" step="any" inputmode="decimal"></div>
+              <div class="field" id="gap-g4"><label for="offset-bPortGap">G4 · 既有 B 口 mm</label><input id="offset-bPortGap" name="bPortGap" type="number" step="any" inputmode="decimal"></div>
+              <div class="field"><label for="offset-trimA">每段直管起端留料 mm</label><input id="offset-trimA" name="trimA" type="number" step="any" inputmode="decimal"></div>
+              <div class="field"><label for="offset-trimB">每段直管終端留料 mm</label><input id="offset-trimB" name="trimB" type="number" step="any" inputmode="decimal"></div>
+              <div class="field"><label for="offset-stations">分點數</label><select id="offset-stations" name="stations"><option value="4">4 點</option><option value="8">8 點</option><option value="12">12 點</option><option value="24">24 點</option></select></div><div class="field full"><label for="offset-minStraight">要求的最短直管 mm</label><input id="offset-minStraight" name="minStraight" type="number" step="any" inputmode="decimal"><small>0 表示未指定工法下限。</small></div>
+            </div></details>
+          </div></section>
+        </div>
+      </form>
+    </section>
+    <section data-stage="2" hidden aria-labelledby="choose-title">
+      <div class="workflow-stage-head"><div><h2 id="choose-title">先看焊口少的接法</h2><p id="measurement-summary"></p></div><button class="button" type="button" data-edit-inputs>修改尺寸</button></div>
+      <section id="component-panel" class="component-panel"><div class="component-panel-head"><div><h3>現場指定零件</h3><p>直管或端口要加閥、法蘭？填實測組立總長，重算管長。</p></div><button type="button" class="button" data-add-component>＋ 加零件</button></div><div id="component-list"></div><div id="component-fit-message" role="status"></div></section>
+      <section id="offset-route-context" class="route-context" aria-live="polite" hidden></section>
+      <section class="workflow-card solution-card"><div class="solution-heading"><h3 id="solution-title">原兩彎頭接法</h3><span id="offset-status" class="workflow-tag">原方案</span></div><p id="solution-note" class="field-note"></p><div class="solution-body">
+        <div class="solution-visual">
+          <div class="solution-view-tabs" role="group" aria-label="接法圖面"><button type="button" data-solution-view="3d" aria-pressed="true">旋轉 3D</button><button type="button" data-solution-view="diagram" aria-pressed="false">零件示意</button></div>
+          <div id="solution-live" class="solution-live">
+            <div id="solution-viewer" class="offset-viewer" tabindex="0" role="group" aria-label="接法 3D，方向鍵旋轉，加減鍵縮放，F 鍵置中" aria-describedby="solution-view-hint"><p>準備 3D…</p></div>
+            <div class="solution-view-tools" role="group" aria-label="3D 操作"><button type="button" data-solution-motion="spin" aria-pressed="false">自動旋轉</button><button type="button" data-solution-motion="in" aria-label="放大 3D">＋</button><button type="button" data-solution-motion="out" aria-label="縮小 3D">−</button><button type="button" data-solution-motion="reset">置中</button></div>
+          </div>
+          <div id="solution-diagram" hidden></div>
+          <p id="solution-view-hint" class="solution-view-hint">拖曳旋轉 · 滾輪／雙指縮放 · 點零件看加工</p>
+        </div><div id="offset-values"></div></div></section>
+      <details class="offset-plans" id="offset-plans"><summary>比較其他接法 <span>整支／對半切彎頭</span></summary><div class="comparison-content"><p class="offset-help">只提供備選，焊口數與新增管段一起比較。</p><button class="button" type="button" id="compare-offset-plans">找接法建議</button>
+        <details class="offset-plan-options"><summary>比較條件 · 預設焊口少，上限 8 個焊口</summary>
+          <div class="fields-grid">
+            <div class="field"><label for="offset-planPreference">建議排序</label><select id="offset-planPreference" name="planPreference" form="offset-inputs"><option value="welds">焊口少優先</option><option value="easy">加工容易優先</option><option value="compact">占用空間小優先</option></select></div>
+            <div class="field"><label for="offset-planMaxJoints">最多焊口數（含兩端）</label><input id="offset-planMaxJoints" name="planMaxJoints" form="offset-inputs" type="number" min="4" max="24" step="1" inputmode="numeric"></div>
+            <div class="field"><label for="offset-planMaxElbows">最多彎頭數</label><select id="offset-planMaxElbows" name="planMaxElbows" form="offset-inputs"><option value="2">2 個</option><option value="3">3 個</option><option value="4">4 個</option></select></div>
+            <div class="field"><label for="offset-planMinPipe">建議的最短直管 mm</label><input id="offset-planMinPipe" name="planMinPipe" form="offset-inputs" type="number" min="0" step="any" inputmode="decimal"><small>搜尋設定，仍須符合原輸入的工法下限。</small></div>
+            <div class="field"><label for="offset-planExtraGap">新增焊口間隙 mm</label><input id="offset-planExtraGap" name="planExtraGap" form="offset-inputs" type="number" min="0" step="any" inputmode="decimal"><small>原 G1～G4 沿用，其餘按此值，依 WPS 指定。</small></div>
+            <div class="field"><label for="offset-planExtraDonor">新增原彎頭角度 °</label><input id="offset-planExtraDonor" name="planExtraDonor" form="offset-inputs" type="number" min="0" max="90" step="any" inputmode="decimal"></div>
+            <div class="field"><label for="offset-planExtraRadius">新增彎頭 Rc mm</label><input id="offset-planExtraRadius" name="planExtraRadius" form="offset-inputs" type="number" min="0" step="any" inputmode="decimal"><small>第三、第四個彎頭的供料。</small></div>
+            <div class="field"><label for="offset-planAOtherTangent">A 原件另一端直段 mm</label><input id="offset-planAOtherTangent" name="planAOtherTangent" form="offset-inputs" type="number" min="0" step="any" inputmode="decimal"><small>整支使用才計入；切短端已切掉此直段。</small></div>
+            <div class="field"><label for="offset-planBOtherTangent">B 原件另一端直段 mm</label><input id="offset-planBOtherTangent" name="planBOtherTangent" form="offset-inputs" type="number" min="0" step="any" inputmode="decimal"></div>
+            <div class="field"><label for="offset-planExtraInTangent">新增原件前端直段 mm</label><input id="offset-planExtraInTangent" name="planExtraInTangent" form="offset-inputs" type="number" min="0" step="any" inputmode="decimal"><small>第三、第四個彎頭均保留前端。</small></div>
+            <div class="field"><label for="offset-planExtraOutTangent">新增原件後端直段 mm</label><input id="offset-planExtraOutTangent" name="planExtraOutTangent" form="offset-inputs" type="number" min="0" step="any" inputmode="decimal"><small>整支使用計入；對半切除時不計。</small></div>
+            <div class="field"><label for="offset-planSpaceLimit">限制繞出範圍？</label><select id="offset-planSpaceLimit" name="planSpaceLimit" form="offset-inputs"><option value="none">先比較，不限制</option><option value="margin">限制超出端口 XYZ 範圍</option></select></div>
+            <div class="field" id="plan-margin-field"><label for="offset-planMargin">中心線最多繞出 mm</label><input id="offset-planMargin" name="planMargin" form="offset-inputs" type="number" min="0" step="any" inputmode="decimal"><small>不是周圍障礙物的淨空檢查。</small></div>
+          </div>
+          <p class="offset-help">原 A／B 彎頭使用上方供料。建議每個彎頭各備一支原件；不假設切掉的半支可直接當另一個精確 45° 件。新增直管逐段另加修磨留料。</p>
+        </details>
+
+        <p class="offset-help" id="offset-plan-status" role="status"></p><div id="offset-plan-cards"></div><details id="offset-plan-limits" class="workflow-advanced" hidden><summary>搜尋範圍與核對</summary><p id="offset-plan-limitation" class="offset-help"></p></details></div>
+      </details>
+    </section>
+    <section data-stage="3" hidden aria-labelledby="fabricate-title">
+      <div class="workflow-stage-head"><div><h2 id="fabricate-title">照尺寸備料、標線與切除</h2><p id="job-choice"></p></div><button class="button" type="button" data-back-choice>重選接法</button></div>
+      <div class="workflow-job-grid">
+        <aside class="workflow-card job-materials"><p class="piece-rail-label">點零件看加工</p><div id="piece-rail" class="piece-rail" role="group" aria-label="加工零件"></div><details id="job-material-details" open><summary>備料與列印設定</summary><table class="material-table"><thead><tr><th>零件</th><th>尺寸與加工</th></tr></thead><tbody id="job-material-rows"></tbody></table><div class="field"><label for="offset-id">工單編號</label><input id="offset-id" value="OFF-001" maxlength="40"></div><div class="field"><label for="offset-paper">列印紙張</label><select id="offset-paper"><option>A4</option><option>A3</option></select></div><details class="workflow-advanced"><summary>其他輸出</summary><div class="secondary-actions"><button class="button" id="print-offset-strips">1:1 切角量尺</button><button class="button" id="offset-csv">尺寸 CSV</button></div><p id="offset-paper-count" class="offset-help"></p></details></details></aside>
+        <section class="workflow-card offset-cut-panel"><div class="cut-piece-head"><div class="field"><label for="cut-end">先加工哪一件？</label><select id="cut-end"></select></div></div><h3 id="cut-piece-title"></h3><div id="offset-cut-values"></div><div id="offset-fabrication-diagram" class="offset-fabrication-diagram"></div><div id="offset-cut-steps"></div><details class="workflow-advanced" id="station-details"><summary>完整周向分點表</summary><div class="field station-count-field"><label for="cut-station-count">分點數</label><select id="cut-station-count"><option value="4">4 點</option><option value="8">8 點</option><option value="12" selected>12 點</option><option value="24">24 點</option></select></div><div class="table-scroll"><table><thead><tr><th>周向 °</th><th>沿周長 mm</th><th>保留弧長 mm</th><th>另一端弧長 mm</th></tr></thead><tbody id="offset-station-rows"></tbody></table></div></details><p class="offset-help" id="offset-cut-note"></p></section>
+      </div>
+      <details class="workflow-optional" id="workflow-model"><summary>旋轉 3D 核對組立方向</summary><section class="offset-model"><div class="offset-model-head"><h3 id="offset-model-title">A 到 B 配管</h3><button class="button" id="reset-offset-view">視角置中</button></div><div class="offset-view-tabs"><button class="button" data-view="offset">整組</button><button class="button" data-view="a">A 彎頭</button><button class="button" data-view="b">B 彎頭</button></div><div class="offset-viewer" id="offset-viewer"><p id="viewer-loading">準備 3D…</p></div><p class="offset-model-note" id="offset-model-note"></p></section></details>
+      <details class="workflow-optional" id="workflow-fit"><summary>比較實際切角／試組差異</summary><section class="offset-fit-panel"><button class="button" id="fit-use-plan">帶入理論尺寸</button><div class="fields-grid offset-fit-fields"><div class="field"><label for="fit-a">A 實際角度 °</label><input id="fit-a" type="number" step="any" inputmode="decimal"></div><div class="field"><label for="fit-b">B 實際角度 °</label><input id="fit-b" type="number" step="any" inputmode="decimal"></div><div class="field"><label for="fit-length">直管成品長 mm</label><input id="fit-length" type="number" step="any" inputmode="decimal"></div></div><button class="button" id="fit-round">角度取整至 0.5° 比較</button><div id="offset-fit-result"></div><p class="offset-help">僅比較剛性幾何差異，不代表可用吊鍊強拉到位。</p></section></details>
+    </section>
+    <footer class="workflow-actions"><span id="workflow-progress">第 1／3 步</span><button class="button" id="workflow-prev" hidden>上一步</button><button class="button primary" id="workflow-next">計算接法</button></footer>
+      <details class="offset-basis"><summary>計算基準與資料來源</summary><p>端口模式同時使用兩端的端面中心位置、向外管軸、實際彎頭半徑、保留端直段與四個焊口間隙，反算兩個彎頭角度及中間直管。非平行管軸可有不同角度與不同彎曲平面；本工具尋找總轉角較小且有正長度直管的接法，輸出前核對端口閉合。沒有解答時不產生加工單。未檢查周圍障礙物、材料干涉或力學承載。</p><p>舊的理論交點模式限平行管軸與等角彎頭。切角理想圓弧彎頭 Ta／Tb＝Rc × tan(θ／2)；現成彎頭使用實測／型錄扣除量。切角母線弧長＝(Rc＋OD／2 × cosφ) × θ（弧度）。Rc 是中心線半徑，外背 φ＝0°，內腹 φ＝180°。端部直段另外輸入；從原件完整外背／內腹弧長反算半徑時不含直段。</p><p>理想圓形彎頭不計橢圓度、壁厚、坡口、切縫或焊接收縮。直管修磨留料獨立顯示，切割在廢料側留線，再修到成品線。1:1 量尺僅供母線弧長，不是整片包覆紙樣。現成彎頭以等效圓弧預覽；實管試量、試切與試組仍需核對。</p><div id="offset-references"></div></details>
+
+  </main>
+  <dialog id="component-editor" aria-labelledby="component-editor-title"><form id="component-form" novalidate><div class="dialog-head"><h2 id="component-editor-title">加入現場零件</h2><button type="button" class="button" id="component-cancel">返回</button></div><div class="component-editor-body">
+    <div id="component-kind-options" class="component-kind-options"></div><div id="component-sketch"></div>
+    <div class="fields-grid"><div class="field"><label for="component-target">放在哪裡？</label><select id="component-target"></select></div><div class="field"><label for="component-length">實測組立總長 mm</label><input id="component-length" type="number" step="any" inputmode="decimal" placeholder="量整組兩個接管端面" required></div><div class="field full"><label for="component-name">零件名稱／標記</label><input id="component-name" maxlength="60" placeholder="例如：隔離閥 V-101"></div></div>
+    <p class="field-note">量整組兩個接管端面之間；已組上的法蘭、墊片包含在總長內。兩端額外接合預留另填，不重複扣除。</p>
+    <div class="component-ends"><section><h3>A 側接法</h3><div class="field"><label for="component-leftConnection">與 A 側管路接合</label><select id="component-leftConnection"><option value="weld">焊接</option><option value="bolt">鎖配對法蘭</option></select></div><div class="field"><label for="component-leftGap">A 側接合預留 mm</label><input id="component-leftGap" type="number" step="any" inputmode="decimal"><small>焊口間隙；法蘭端填尚未包含的壓緊墊片厚度。</small></div></section><section><h3>B 側接法</h3><div class="field"><label for="component-rightConnection">與 B 側管路接合</label><select id="component-rightConnection"><option value="weld">焊接</option><option value="bolt">鎖配對法蘭</option></select></div><div class="field"><label for="component-rightGap">B 側接合預留 mm</label><input id="component-rightGap" type="number" step="any" inputmode="decimal"></div></section></div>
+    <div id="component-position-fields" class="fields-grid"><div class="field"><label for="component-placement">在這段直線怎麼放？</label><select id="component-placement"><option value="center">置中，前後分配直管</option><option value="fromA">指定 A 側直管長</option><option value="fromB">指定 B 側直管長</option></select></div><div id="component-distance-field" class="field" hidden><label id="component-distance-label" for="component-distance">A 側成品直管長 mm</label><input id="component-distance" type="number" step="any" inputmode="decimal"></div></div>
+    <details class="workflow-advanced"><summary>組內接合數</summary><div class="field"><label for="component-internalBolts">總長內已包含的螺栓接合數</label><input id="component-internalBolts" type="number" step="1" min="0" max="20"><small>法蘭組是一對法蘭及墊片，預設 1 處；閥組依實際配對件填。</small></div></details><p id="component-form-error" role="alert" hidden></p>
+    <div class="component-form-actions"><button type="button" class="button" id="component-remove" hidden>移除這組零件</button><button type="submit" class="button primary">套用，重算管長</button></div>
+  </div></form></dialog>
+  <dialog id="offset-preview"><div class="dialog-head"><h2 id="offset-preview-title">列印預覽</h2><button class="button" id="close-offset-preview">返回工作台</button></div><div class="offset-preview-actions"><p>工單示意不按比例；1:1 量尺須核對雙方向 100 mm 校正尺。列印選 100%。</p><button class="button" id="download-offset-print">下載列印檔</button><button class="button primary" id="print-offset-preview">列印／PDF</button></div><iframe id="offset-print-frame" title="偏移配管工單與切角量尺預覽"></iframe></dialog>
+  <div id="offset-toast" role="status" class="offset-toast" hidden></div>
+  </div>
+  <script src="assets/workbench-boot.js"></script>
+</body>
+</html>

@@ -1,5 +1,6 @@
 .sites-runtime/
 node_modules/
+.local/
 *.tar.gz
 test-results/
 .DS_Store

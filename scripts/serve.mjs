@@ -9,6 +9,11 @@ const mime = { '.html':'text/html; charset=utf-8', '.js':'text/javascript; chars
 const server = http.createServer(async (request, response) => {
   try {
     const pathname = decodeURIComponent(new URL(request.url, 'http://localhost').pathname);
+    if (pathname === '/__workbench') {
+      response.writeHead(200, { 'Content-Type':'application/json; charset=utf-8', 'Cache-Control':'no-store' });
+      response.end(JSON.stringify({ app:'special-method-workbench', workspace:root, port:server.address().port }));
+      return;
+    }
     const relative = pathname === '/' ? 'index.html' : pathname.replace(/^\/+/, '');
     const target = path.resolve(root, relative);
     if (target !== root && !target.startsWith(root + path.sep)) { response.writeHead(403); response.end('Forbidden'); return; }
@@ -18,5 +23,6 @@ const server = http.createServer(async (request, response) => {
     response.end(body);
   } catch { response.writeHead(404, { 'Content-Type':'text/plain; charset=utf-8' }); response.end('Not found'); }
 });
-server.listen(port, '127.0.0.1', () => process.stdout.write(`配管放樣工作台 http://127.0.0.1:${port}/\n`));
+server.on('error', error => { process.stderr.write(error.code==='EADDRINUSE'?`連接埠 ${port} 已被使用。請使用啟動工作台.cmd 開啟，或指定其他 PORT。\n`:error.message+'\n');process.exitCode=1; });
+server.listen(port, '127.0.0.1', () => process.stdout.write(`特殊工法工作台 http://127.0.0.1:${server.address().port}/\n`));
 process.on('SIGINT', () => server.close(() => process.exit(0)));
