@@ -9,22 +9,31 @@ function checked(result){if(!result?.valid)throw new Error('尺寸無效，請�
 // A project stores measured inputs; manufacturing exports still require a closed, selected route.
 function projectInputs(result){if(!result.valid&&!(result.params.basis==='ports'&&result.context))throw new Error(result.errors.map(e=>e.message).join(' '));return result;}
 export function offsetProjectJSON(params,id='OFF-001') {
-  const r=projectInputs(computeOffset(params));return JSON.stringify({format:'special-method-offset',version:4,id:String(id).slice(0,40),params:r.params},null,2);
+  const r=projectInputs(computeOffset(params));return JSON.stringify({format:'special-method-offset',version:5,id:String(id).slice(0,40),params:r.params},null,2);
 }
 export function readOffsetProject(text) {
   const data=JSON.parse(text);
-  if(data?.format!=='special-method-offset'||![1,2,3,4].includes(data.version)||!data.params||typeof data.params!=='object'||Array.isArray(data.params))throw new Error('不是支援的偏移配管專案。');
+  if(data?.format!=='special-method-offset'||![1,2,3,4,5].includes(data.version)||!data.params||typeof data.params!=='object'||Array.isArray(data.params))throw new Error('不是支援的偏移配管專案。');
   const keys=Object.keys(DEFAULT_OFFSET),expected=data.version===1?keys.slice(0,keys.indexOf('basis')):data.version===2?keys.slice(0,keys.indexOf('planPreference')):data.version===3?keys.filter(k=>k!=='components'):keys;
   const optionalTangents=['planAOtherTangent','planBOtherTangent','planExtraInTangent','planExtraOutTangent'];
   const required=data.version>=3?expected.filter(k=>!optionalTangents.includes(k)):expected;
   if(required.some(k=>!Object.hasOwn(data.params,k))||Object.keys(data.params).some(k=>!expected.includes(k)))throw new Error('偏移配管專案欄位不完整或含未知欄位。');
   const result=projectInputs(computeOffset({...DEFAULT_OFFSET,...(data.version<3?{planMaxJoints:5}:{}),...data.params,...(data.version===1?{basis:'intersections'}:{})}));
-  return {params:result.params,id:typeof data.id==='string'?data.id.slice(0,40):'OFF-001'};
+  return {params:result.params,id:typeof data.id==='string'?data.id.slice(0,40):'OFF-001',notices:legacyOffsetNotices(data.version,result.params)};
+}
+// Version 5 (2026-10): right-handed labels (+Y = left) and factory Ta = centre to mating face.
+// Older saves keep their numbers; tell the user once where the meaning may differ.
+export function legacyOffsetNotices(version,p){
+  if(version>=5)return [];const notices=[];
+  const usesY=p.layout==='rolling'&&Number(p.roll)!==0||['aAxis','bAxis'].some(k=>String(p[k]).startsWith('y'))||['a','b'].some(e=>p[e+'Axis']==='custom'&&Number(p[e+'AxisY'])!==0)||p.datum==='marks'&&(Number(p.aShiftY)!==0||Number(p.bShiftY)!==0);
+  if(usesY)notices.push('此專案存於舊版（Y 標示右為正）。現在採右手座標：前＋X、左＋Y、上＋Z。若當初往右量為正，請將 Y、±Y 朝向與 Y 修正量反號後再出單。');
+  if(['a','b'].some(e=>p[e+'Kind']==='factory'&&Number(p[e+'Tangent'])>0))notices.push('此專案的現成彎頭曾另加保留端直段；現在 Ta 即中心至接合端面，直管長度已依此重算，請核對 Ta。');
+  return notices;
 }
 const csvCell = v => '"'+String(v).replaceAll('"','""')+'"';
 export function offsetCSV(result) {
-  const r=checked(result),rows=[['項目','值','單位／基準'],['量測模式',r.basis==='ports'?'既有端口':'理論交點',''],['高低差／平面偏移',r.rise,'mm；中心線'],['側移',r.roll,'mm；中心線'],['真正偏移',r.offset,'mm'],[r.basis==='ports'?'端口 ΔX':'Run',r.run,r.basis==='ports'?'mm；端面中心':'mm；兩理論交點沿入口軸'],['Travel',r.travel,'mm；兩理論交點沿斜管軸'],['A 所需彎頭角度',r.elbows.a.angle,'deg'],['B 所需彎頭角度',r.elbows.b.angle,'deg'],['A 端 Ta',r.elbows.a.takeout,'mm'],['B 端 Tb',r.elbows.b.takeout,'mm'],['A 端焊口間隙',r.elbows.a.gap,'mm；G2'],['B 端焊口間隙',r.elbows.b.gap,'mm；G3'],['直管裁切長',r.cutLength,'mm；兩端面沿管軸']];
-  if(r.basis==='ports')rows.push(['G1 既有 A 管口',r.params.aPortGap,'mm'],['G4 既有 B 管口',r.params.bPortGap,'mm'],['直管先下料長',r.blankLength,'mm'],['A 保留端直段',r.params.aTangent,'mm'],['B 保留端直段',r.params.bTangent,'mm'],['A 修磨留料',r.params.trimA,'mm'],['B 修磨留料',r.params.trimB,'mm'],['指定最短直管',r.params.minStraight,'mm；0 表示未指定']);
+  const r=checked(result),ports=r.basis==='ports',rows=[['項目','值','單位／基準'],['量測模式',ports?'既有端口':'理論交點',''],[ports?'端口 ΔZ 高低':'高低差／平面偏移',r.rise,ports?'mm；端面中心':'mm；中心線'],[ports?'端口 ΔY 左右（左＋）':'側移',r.roll,ports?'mm；端面中心':'mm；中心線'],['真正偏移',r.offset,ports?'mm；B 端面中心到 A 管軸的垂距':'mm'],[r.basis==='ports'?'端口 ΔX':'Run',r.run,r.basis==='ports'?'mm；端面中心':'mm；兩理論交點沿入口軸'],['Travel',r.travel,'mm；兩理論交點沿斜管軸'],['A 所需彎頭角度',r.elbows.a.angle,'deg'],['B 所需彎頭角度',r.elbows.b.angle,'deg'],['A 端 Ta',r.elbows.a.takeout,'mm'],['B 端 Tb',r.elbows.b.takeout,'mm'],['A 端焊口間隙',r.elbows.a.gap,'mm；G2'],['B 端焊口間隙',r.elbows.b.gap,'mm；G3'],['直管裁切長',r.cutLength,'mm；兩端面沿管軸']];
+  if(r.basis==='ports')rows.push(['G1 既有 A 管口',r.params.aPortGap,'mm'],['G4 既有 B 管口',r.params.bPortGap,'mm'],['直管先下料長',r.blankLength,'mm'],['A 保留端直段',r.elbows.a.tangent??0,'mm'],['B 保留端直段',r.elbows.b.tangent??0,'mm'],['A 修磨留料',r.params.trimA,'mm'],['B 修磨留料',r.params.trimB,'mm'],['指定最短直管',r.params.minStraight,'mm；0 表示未指定']);
   rows.push([],['彎頭','周向角 deg','原端口沿周長 mm','由保留端沿外表面弧量到切線 mm','由另一端沿外表面弧量到切線 mm']);
   for(const e of Object.values(r.elbows))for(const s of e.stations)rows.push([e.end,s.clock,s.around,s.kept,s.removed]);
   return '\uFEFF'+rows.map(row=>row.map(v=>csvCell(typeof v==='number'?exact(v):v)).join(',')).join('\r\n');
@@ -48,7 +57,7 @@ const vector=(q,n=4)=>q.map(v=>fmt(v,n)).join('，');
 function assemblyClock(r,end){
   const axis=end==='a'?r.axes.a:r.axes.b.map(v=>-v),outside=offsetSurfaceFrame(r,end,end==='a'?0:1).outside;
   let ref=[0,0,1],label='+Z 上方',d=axis[2],top=ref.map((v,i)=>v-d*axis[i]);
-  if(Math.hypot(...top)<1e-6){ref=[0,1,0];label='+Y 方向';d=axis[1];top=ref.map((v,i)=>v-d*axis[i]);}
+  if(Math.hypot(...top)<1e-6){ref=[0,1,0];label='+Y（左）方向';d=axis[1];top=ref.map((v,i)=>v-d*axis[i]);}
   const len=Math.hypot(...top);top=top.map(v=>v/len);const right=cross(axis,top),dot=(a,b)=>a.reduce((s,v,i)=>s+v*b[i],0),angle=(Math.atan2(dot(outside,right),dot(outside,top))*180/Math.PI+360)%360;
   return `${end.toUpperCase()} 保留端朝彎頭內看：以端面投影的 ${label} 作 12 點，外背在順時針 ${fmt(angle,2)}°。外背向量（X／Y／Z）＝${vector(outside)}。`;
 }
@@ -57,7 +66,7 @@ function buildPortWorkOrder(r,id,paper,fit){
   const pages=[heading(r,id,'端口反算 · 備料與組立加工單')+`<div class="summary">中間直管成品長 <strong>${fmt(r.cutLength)} mm</strong><p>先下料 ${fmt(r.blankLength)} mm → A 端修去 ${fmt(p.trimA)}／B 端修去 ${fmt(p.trimB)} mm → 成品長</p></div><div class="order-diagram">${offsetDiagramSVG(r)}</div><h2>現場量測與備料</h2>`+rows([
     ['量測點',p.datum==='marks'?'現場標記點，已修正到端面中心':'端面中心'],['A → B 量測 X／Y／Z（mm）',vector(r.measured)],['中心修正 A／B（mm）',p.datum==='marks'?vector(r.ports.a)+' ／ '+vector(r.ports.b.map((v,i)=>v-r.measured[i])):'兩端 0，使用端面中心'],['端面中心差 X／Y／Z（mm）',vector(r.delta)],['A／B 管口向外軸',vector(r.axes.a)+' ／ '+vector(r.axes.b.map(v=>-v))],['A 彎頭',`${fmt(eA.donor)}° 原件 → 保留 ${fmt(eA.angle,4)}°，Rc ${fmt(eA.radius)} mm，${eA.kind==='cut'?'需切角':'現成件'}`],['B 彎頭',`${fmt(eB.donor)}° 原件 → 保留 ${fmt(eB.angle,4)}°，Rc ${fmt(eB.radius)} mm，${eB.kind==='cut'?'需切角':'現成件'}`],['直管',`OD ${fmt(p.od)} mm，1 支，下料 ${fmt(r.blankLength)}／成品 ${fmt(r.cutLength)} mm`],['最短直管要求',p.minStraight?`${fmt(p.minStraight)} mm`:'未指定；僅檢查有正長度直管']])+`<p>成品直管＝理論交點斜距 ${fmt(r.travel)} − Ta ${fmt(eA.takeout)} − Tb ${fmt(eB.takeout)} − G2 ${fmt(eA.gap)} − G3 ${fmt(eB.gap)}。G1／G4、原件保留端直段已納入端口反算，不能再扣一次。</p><p>按理想圓形彎頭計算；供料半徑、端口方向及四個焊口依實測／WPS 核對。未計橢圓、收縮、障礙干涉或力學承載。</p>`];
   const gapSketch=`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 100" style="width:190mm;height:27mm"><path d="M20 52H700" fill="none" stroke="#7a8e9e" stroke-width="2"/>${[['A 既有口',35],['A 彎頭',185],['直管',360],['B 彎頭',535],['B 既有口',690]].map(([name,x])=>`<rect x="${x-32}" y="37" width="64" height="30" fill="#eaf1f6" stroke="#34546c"/><text x="${x}" y="89" text-anchor="middle" font-size="13">${name}</text>`).join('')}${[['G1',110,p.aPortGap],['G2',270,p.aGap],['G3',450,p.bGap],['G4',610,p.bPortGap]].map(([name,x,g])=>`<text x="${x}" y="23" text-anchor="middle" font-size="14">${name} ${fmt(g)} mm</text><path d="M${x} 30V72" stroke="#b77416" stroke-dasharray="4 3"/>`).join('')}</svg>`;
-  pages.push(heading(r,id,'組立方向與四個焊口')+`<h2>焊口位置（順序示意，非等比例）</h2>${gapSketch}`+rows([['G1 既有 A 口 ↔ A 保留口',fmt(p.aPortGap)+' mm，沿 A 管口軸'],['G2 A 切口 ↔ 直管',fmt(p.aGap)+' mm，沿直管軸'],['G3 直管 ↔ B 切口',fmt(p.bGap)+' mm，沿直管軸'],['G4 B 保留口 ↔ 既有 B 口',fmt(p.bPortGap)+' mm，沿 B 管口軸'],['A／B 自帶保留端直段',`${fmt(p.aTangent)}／${fmt(p.bTangent)} mm`]])+`<h2>彎頭的外背朝哪裡？</h2><p>${assemblyClock(r,'a')}</p><p>${assemblyClock(r,'b')}</p><p>先在保留端標外背，再對照現場 XYZ 方向定位。B 彎頭保留端接既有 B 管口，切短端接直管，不能把兩個保留端都朝同一方向裝。</p><h2>直管與試組順序</h2><ol><li>直管先下料 ${fmt(r.blankLength)} mm；先做一端基準，再修兩端到成品 ${fmt(r.cutLength)} mm。</li><li>成品兩端切面垂直管軸。切片在廢料側留線；坡口與鈍邊另按 WPS 製作。</li><li>標 A／B、外背及組立方向。支撐管件，依 G1→G4 預留四個焊口，定位試組。</li><li>從既有 A 端面中心核對 B 的 XYZ；量四周根部間隙、平行度及內外錯邊。原件角度或半徑不符時，先修正尺寸。</li><li>尺寸核對後定位點焊、再複量。焊接及收縮補償依施工工法；本單沒有自動加入收縮量。</li></ol><p>差距不代表可強拉。吊鍊可作支撐／定位用途；本工具沒有材料、壁厚、支撐和設備負載資料，不判定可拉毫米數。</p>`);
+  pages.push(heading(r,id,'組立方向與四個焊口')+`<h2>焊口位置（順序示意，非等比例）</h2>${gapSketch}`+rows([['G1 既有 A 口 ↔ A 保留口',fmt(p.aPortGap)+' mm，沿 A 管口軸'],['G2 A 切口 ↔ 直管',fmt(p.aGap)+' mm，沿直管軸'],['G3 直管 ↔ B 切口',fmt(p.bGap)+' mm，沿直管軸'],['G4 B 保留口 ↔ 既有 B 口',fmt(p.bPortGap)+' mm，沿 B 管口軸'],['A／B 自帶保留端直段',`${fmt(r.elbows.a.tangent??0)}／${fmt(r.elbows.b.tangent??0)} mm${[r.elbows.a,r.elbows.b].some(e=>e.kind==='factory')?'（現成件 Ta 已含直段）':''}`]])+`<h2>彎頭的外背朝哪裡？</h2><p>${assemblyClock(r,'a')}</p><p>${assemblyClock(r,'b')}</p><p>先在保留端標外背，再對照現場 XYZ 方向定位。B 彎頭保留端接既有 B 管口，切短端接直管，不能把兩個保留端都朝同一方向裝。</p><h2>直管與試組順序</h2><ol><li>直管先下料 ${fmt(r.blankLength)} mm；先做一端基準，再修兩端到成品 ${fmt(r.cutLength)} mm。</li><li>成品兩端切面垂直管軸。切片在廢料側留線；坡口與鈍邊另按 WPS 製作。</li><li>標 A／B、外背及組立方向。支撐管件，依 G1→G4 預留四個焊口，定位試組。</li><li>從既有 A 端面中心核對 B 的 XYZ；量四周根部間隙、平行度及內外錯邊。原件角度或半徑不符時，先修正尺寸。</li><li>尺寸核對後定位點焊、再複量。焊接及收縮補償依施工工法；本單沒有自動加入收縮量。</li></ol><p>差距不代表可強拉。吊鍊可作支撐／定位用途；本工具沒有材料、壁厚、支撐和設備負載資料，不判定可拉毫米數。</p>`);
   for(const e of Object.values(r.elbows))if(e.kind==='cut'){
     pages.push(heading(r,id,e.end+' 彎頭 · 捲尺標線與切除')+`<div class="fabrication">${elbowFabricationSVG(e,p.od)}</div><h2>沿外表面量，單位 mm</h2>`+rows([['外背／內腹彎曲弧',`${fmt(e.outerArc)}／${fmt(e.innerArc)}`],['右側／左側彎曲弧',`${fmt(e.centerArc)}／${fmt(e.centerArc)}`],['從保留端面量',`各弧長加自帶直段 ${fmt(e.tangent)} mm`],['切掉的外背／內腹彎曲弧',`${fmt(e.stations[0].removed)}／${fmt(e.stations[e.stations.length/2|0].removed)}`]])+elbowCutSteps(e,p.od));
     for(let start=0;start<e.stations.length;start+=25)pages.push(heading(r,id,e.end+' 彎頭 · 周向分點尺寸')+stationTable(e,e.stations.slice(start,start+25))+`<p>周向 0° 外背、90° 右、180° 內腹、270° 左；從保留端朝彎頭內看。端口周長為周向定位尺寸，不是縱向切線距離。</p><p>表內弧長從彎曲弧面起點量；由保留端面量時各加 ${fmt(e.tangent)} mm。另一端的剩餘弧也從該端弧面起點量，不包含該端直段。360° 為閉合核對。</p><p>有限分點標完後平順連成切面。沿廢料側留線切除、修到成品線；不能把周向定位尺或母線當成金屬切線。</p>`);

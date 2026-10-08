@@ -23,6 +23,7 @@ import {emptyFabricationPlan,validateFabricationPlan,reconcileFitRecords,clearFi
 import {fabricationFormMarkup,fitupPanelMarkup,fitupDiagram,budgetText,phaseText} from './workshop-ui.js';
 import { ASME_PIPE_SIZES } from './pipe-sizes.js';
 import { pipeSizeByNPS,setupFromParams,positionWithIntent,freshInputParams } from './input-setup.js';
+import {mountWorkbenchStatus} from './workbench-status.js';
 
 const $=id=>document.getElementById(id);
 const closedMother=()=>state.params.motherOpening===false;
@@ -120,6 +121,24 @@ function displayErrors() {
   repairIssues=errors.map(e=>issueGuidance(e,state.params));
   $('form-errors').hidden=!errors.length;$('form-errors').innerHTML=errors.length?`<strong>${state.result?.errors.length||state.result?.valid&&!fabricationReadiness(state.result).ready?`先處理 ${errors.length} 個計算條件`:`加工紀錄 ${errors.length} 項需修正；幾何紙樣依計算結果出圖`}</strong>`+repairIssues.map((g,i)=>`<article class="repair-card"><h3>${esc(g.title)}</h3><p>${esc(g.detail)}</p><button type="button" class="issue-link" data-error-index="${i}"><b>${esc(g.actionLabel)} →</b></button>${g.actions.length?`<div class="repair-actions">${g.actions.map(a=>`<button type="button" data-repair-action="${esc(a.id)}"${pending?' disabled':''}>${esc(a.label)}</button><small>${esc(a.note)}</small>`).join('')}</div>`:''}<details><summary>查看計算原因</summary><p>${esc(g.reason)}</p></details></article>`).join('')+'<p id="repair-feedback" role="status" hidden></p>':'';
   for(const b of $('parameter-form').querySelectorAll('[data-setting-panel]')){const count=repairIssues.filter(e=>settingPanelForField(e.routeField??e.field)===Number(b.dataset.settingPanel)).length;b.classList.toggle('has-error',!!count);const old=b.querySelector('.issue-count');if(old)old.remove();if(count)b.insertAdjacentHTML('beforeend',`<i class="issue-count" aria-label="${count} 項需修正">${count}</i>`);}
+  renderJointStatus();
+}
+// Lazily mounted: render paths may run before this line during module start-up.
+var statusStripInstance;// var + function declaration: both are usable before this line runs.
+function statusStripUpdate(model){(statusStripInstance??=mountWorkbenchStatus(document.querySelector('.workbench-nav'),{wide:true})).update(model);}
+const SECTION_SHORT={chs:'CHS 圓管',shs:'SHS 方管',rhs:'RHS 矩形管',h:'H 型鋼',i:'I 型鋼',l:'角鋼',c:'槽鋼'};
+// Glanceable joint state: can it be cut/printed, what joint is it, and which problems block it.
+function renderJointStatus(){
+  const p=state.params,r=state.result,f=v=>fmt(Number(v)),host=p.hostType==='elbow'?`彎頭 Ø${f(p.mainOD)} R${f(p.bendRadius)}`:p.hostType==='cone'?`大小管 Ø${f(p.mainOD)}→${f(p.mainEndOD)}`:`直管 Ø${f(p.mainOD)}`;
+  const branch=isSteelSection(p)?(SECTION_SHORT[p.branchSection]??'鋼構支材'):`支管 Ø${f(p.branchOD)}`,joint=isSteelSection(p)||p.motherOpening===false?'封閉外焊':p.jointType==='in'?'內插':'外貼';
+  const metrics=[{label:'母材',value:host},{label:'支材',value:branch},{label:'角度',value:f(p.angle),unit:'°'},{label:'接法',value:joint,quiet:true}];
+  if(pending){statusStripUpdate({tone:'busy',title:'計算中…',detail:'背景求交與精度核對',metrics,issues:[]});return;}
+  const issues=repairIssues.map((g,i)=>({level:'error',text:g.title+(g.detail?'：'+g.detail:''),actionLabel:g.actionLabel,action:()=>jumpToIssue(g.routeField??g.field)}));
+  // Geometry notes are mostly standing scope statements; only actionable ones raise the tone.
+  for(const w of r?.warnings??[]){const text=typeof w==='string'?w:(w.message??'');issues.push({level:/超過|請核對|請提高|尚未達|請改|請增加|干涉|不足|超出|無法/.test(text)?'warn':'info',text,actionLabel:w.field?'前往':'',action:w.field?()=>jumpToIssue(w.field):null});}
+  const ready=Boolean(r?.valid)&&fabricationReadiness(r).ready,geometryErrors=(r?.errors?.length??0)>0||(r?.valid&&!ready);
+  const title=!r?'尚未計算':geometryErrors?(r.valid?'精度未達標 · 停止出圖':'尺寸待修正'):state.fabricationError?'紙樣可出 · 紀錄需修正':issues.some(i=>i.level==='warn')?'可出圖 · 請核對提示':'幾何可出圖';
+  statusStripUpdate({tone:!r?'idle':geometryErrors?'error':state.fabricationError||issues.some(i=>i.level==='warn')?'warn':'ok',title,detail:r?.valid?`${p.hostType==='elbow'?'分點定位工單':'1:1 紙樣'}＋現場工單`:'修正後才會出紙樣',metrics,issues});
 }
 function jumpToIssue(field){
   const error=state.result?.errors.find(e=>e.field===field),guide=issueGuidance(error??{field,message:''},state.params);
@@ -160,7 +179,7 @@ function compute(recordHistory=true){
 }
 async function performCompute(recordHistory=true) {
   closeAnglePanel();
-  clearTimeout(timer);pending=true;modelEditor.setPending(state.params);syncModelControls();for(const id of ['svg-export','dxf-export','csv-export','report-button','quick-report','print-current-pattern','full-report','step-report'])if($(id))$(id).disabled=true;$('geometry-status').textContent='計算中…';$('paper-ready').textContent='計算中…';state.fabricationError='';try{const checked=reconcileFitRecords(state.fabrication,state.params);state.fabrication=checked.plan;if(checked.cleared){renderFitup(true);notify('尺寸已改變，舊實測紀錄已清空，請重新試配。');}}catch(error){state.fabricationError=error.message;}if($('report-preview').open)$('report-preview').close();const requested={...state.params},requestedKey=JSON.stringify(requested),previousSection=state.result?.params?.branchSection,previousHost=state.result?.params?.hostType;try{const calculated=await computeLatestJoint(requested);if(requestedKey!==JSON.stringify(state.params))return;state.result=calculated;}catch(error){if(error.name==='AbortError')return;state.result={valid:false,params:requested,errors:[{field:'elbowGeometry',message:'計算未完成：'+error.message+'。請修正尺寸或再試一次。'}],templates:[],verification:[],warnings:[],geometry:null,measurements:{},stationTable:[]};notify(error.message);}pending=false;state.revision++;
+  clearTimeout(timer);pending=true;modelEditor.setPending(state.params);syncModelControls();for(const id of ['svg-export','dxf-export','csv-export','report-button','quick-report','print-current-pattern','full-report','step-report'])if($(id))$(id).disabled=true;$('geometry-status').textContent='計算中…';$('paper-ready').textContent='計算中…';renderJointStatus();state.fabricationError='';try{const checked=reconcileFitRecords(state.fabrication,state.params);state.fabrication=checked.plan;if(checked.cleared){renderFitup(true);notify('尺寸已改變，舊實測紀錄已清空，請重新試配。');}}catch(error){state.fabricationError=error.message;}if($('report-preview').open)$('report-preview').close();const requested={...state.params},requestedKey=JSON.stringify(requested),previousSection=state.result?.params?.branchSection,previousHost=state.result?.params?.hostType;try{const calculated=await computeLatestJoint(requested);if(requestedKey!==JSON.stringify(state.params))return;state.result=calculated;}catch(error){if(error.name==='AbortError')return;state.result={valid:false,params:requested,errors:[{field:'elbowGeometry',message:'計算未完成：'+error.message+'。請修正尺寸或再試一次。'}],templates:[],verification:[],warnings:[],geometry:null,measurements:{},stationTable:[]};notify(error.message);}pending=false;state.revision++;
   // The operator can edit process measurements while the geometry worker runs.
   // Commit against the current record, not the copy checked before awaiting.
   state.fabricationError='';try{const checked=reconcileFitRecords(state.fabrication,state.params);state.fabrication=checked.plan;if(checked.cleared)renderFitup(true);}catch(error){state.fabricationError=error.message;}
@@ -275,7 +294,10 @@ function renderPattern() {
 }
 function renderVerification() {
   const r=state.result,vfmt=v=>v!==0&&Math.abs(v)<.000001?v.toExponential(2):fmt(v,6);
-  $('verification-rows').innerHTML=r.verification.map(v=>`<tr><td>${esc(v.label)}</td><td>${vfmt(v.value)} ${v.unit}</td><td>${['wall-collision','formed-pad-layer-checks'].includes(v.id)?'有限採樣':`${['pad-margin','pad-inner-fit','pad-outer-fit','formed-pad-whole-thickness-margin','formed-pad-free-end'].includes(v.id)?'≥':'≤'} ${fmt(v.tolerance,6)} ${v.unit}`}</td><td class="${v.status==='pass'?'pass':'fail'}">${v.status==='pass'?'通過':v.status==='warning'?'需調整':'未通過'}</td></tr>`).join('');
+  const atLeast=['pad-margin','pad-inner-fit','pad-outer-fit','formed-pad-whole-thickness-margin','formed-pad-free-end'];
+  // Margin bar: share of the allowance already used (≤ checks) or how close a margin is to its minimum (≥ checks).
+  const marginBar=v=>{if(['wall-collision','formed-pad-layer-checks'].includes(v.id)||!Number.isFinite(v.value)||!(v.tolerance>0))return '';const ratio=atLeast.includes(v.id)?(v.value>0?v.tolerance/v.value:Infinity):Math.abs(v.value)/v.tolerance,level=ratio>1?'fail':ratio>.6?'tight':'ok';return `<span class="margin-bar" data-level="${level}" title="已用允許值 ${Number.isFinite(ratio)?fmt(Math.min(ratio,9.99)*100,1):'—'}%" aria-hidden="true"><i style="width:${Math.max(3,Math.min(100,(Number.isFinite(ratio)?ratio:1)*100)).toFixed(1)}%"></i></span>`;};
+  $('verification-rows').innerHTML=r.verification.map(v=>`<tr><td>${esc(v.label)}</td><td>${vfmt(v.value)} ${v.unit}</td><td>${['wall-collision','formed-pad-layer-checks'].includes(v.id)?'有限採樣':`${atLeast.includes(v.id)?'≥':'≤'} ${fmt(v.tolerance,6)} ${v.unit}`}</td><td class="${v.status==='pass'?'pass':'fail'}">${marginBar(v)}${v.status==='pass'?'通過':v.status==='warning'?'需調整':'未通過'}</td></tr>`).join('');
   $('validation-summary').textContent=r.valid?`${r.params.hostType==='elbow'?`彎頭 R ${fmt(r.params.bendRadius)} mm，${fmt(r.params.bendAngle)}°；${closedMother()?'貼合':'開孔'}用截面與分點定位；`:`主管孔 ${fmt(r.measurements.mainHoleAxialLength,2)} × ${fmt(r.measurements.mainHoleArcWidth,2)} mm（軸向 × 周向）；`}支管切深 ${fmt(r.measurements.branchMinLength,2)}–${fmt(r.measurements.branchMaxLength,2)} mm${r.geometry?.pad?.hostType==='elbow'?`；成形板最低留邊 ${fmt(r.measurements.padMinimumMargin)} mm`:r.params.padEnabled?`；補強板淨面積 ${fmt(r.measurements.padNetArea/100,2)} cm²`:''}${r.precision?`；數值輪廓 ${r.precision.effectiveSamples} 點，採樣弦差（含數值餘量）${fmt(r.precision.maxChordError,5)} mm`:''}`:'模型無效，請先修正尺寸。';$('warnings').innerHTML=[...new Set([...r.warnings,...(r.valid&&!fabricationReadiness(r).ready?[fabricationReadiness(r).reason]:[])])].map(w=>`<p>${esc(w)}</p>`).join('');
 }
 function tableResult() {

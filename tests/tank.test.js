@@ -77,7 +77,7 @@ test('fully recorded conditions never claim a completed ASME thickness calculati
 test('projects round-trip known fields, ignore extra keys and reject malformed or incompatible formats',()=>{
   const p={...TANK_DEFAULTS,shape:'elliptical',headWeight:120,edition:'contract edition'};assert.deepEqual(readTankProject(tankProject(p)),p);
   const edited=JSON.parse(tankProject(p));edited.input.extra='ignore';assert.equal(readTankProject(JSON.stringify(edited)).extra,undefined);
-  for(const text of ['{}','bad',JSON.stringify({type:'special-method-tank',version:2,input:p}),tankProject({...p,height:-1}),tankProject({...p,medium:{bad:1}})])assert.throws(()=>readTankProject(text));
+  for(const text of ['{}','bad',JSON.stringify({type:'special-method-tank',version:99,input:p}),tankProject({...p,height:-1}),tankProject({...p,medium:{bad:1}})])assert.throws(()=>readTankProject(text));
 });
 test('print and CSV retain gaps, procurement, uncertainties and escaped owner-entered text',()=>{
   const r=estimateTank({shape:'elliptical',service:'vacuum',medium:'<script>alert(1)</script>',material:'=HYPERLINK("bad")',headStraight:40,headGap:3,gap:2,trim:8});const html=tankWorkOrder(r),csv=tankCSV(r);

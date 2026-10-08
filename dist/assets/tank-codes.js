@@ -1,3 +1,4 @@
+import {tankEnds} from './tank-geometry.js';
 export const CODE_SOURCES=[{label:'ASME VIII-1：壓力容器範圍',url:'https://www.asme.org/codes-standards/find-codes-standards/bpvc-viii-1-bpvc-section-viii-rules-construction-pressure-vessels-division-1'},{label:'API 650：官方儲槽範圍（目錄第 9 頁）',url:'https://www.api.org/-/media/files/publications/2025-catalog/06_refining_2025.pdf'},{label:'ASME：認證與品質控制資源',url:'https://www.asme.org/certification-accreditation/resources-and-events/downloadable-resources'}];
 export const DESIGN_FIELDS={service:'操作類別（常壓／加壓／真空）',code:'業主指定規範',edition:'合約採用版次',jurisdiction:'設置地／適用法規',medium:'儲存介質',material:'正式材料規格／牌號',pressure:'設計內壓 kPa(g)',vacuum:'設計外壓差 kPa',temperature:'最高設計溫度 °C',minTemperature:'最低設計金屬溫度 °C',liquidDensity:'內容物密度 kg/m³',corrosion:'腐蝕裕量 mm',efficiency:'焊接接頭效率 E'};
 const labels=DESIGN_FIELDS;
@@ -16,9 +17,11 @@ export function tankCodeGuide(p){
   if(supplied(p.temperature)&&supplied(p.minTemperature)&&Number(p.minTemperature)>Number(p.temperature))numericIssues.push({field:'minTemperature',label:'最低設計金屬溫度不得高於最高設計溫度'});
   const concerns=[];
   if(p.nozzles?.length)concerns.push('已規劃管嘴及法蘭；開孔補強、局部應力、外接管線載荷及法蘭壓溫額定尚未校核，尺寸記錄不代表設計通過。');
-  if(pressurized&&p.shape!=='elliptical')concerns.push('目前選的是平底／平蓋；其承壓或抗真空能力未經設計驗證。圓筒估料公式不能證明平板端部可承壓。');
+  const ends=tankEnds(p),endList=[ends.top,ends.bottom];
+  if(pressurized&&endList.some(t=>t==='flat'||t==='open'))concerns.push('目前選的是平底／平蓋；其承壓或抗真空能力未經設計驗證。圓筒估料公式不能證明平板端部可承壓。');
+  if(pressurized&&endList.includes('cone'))concerns.push('錐形端部承壓時，錐殼厚度與錐筒接合處（大端／小端）的補強需另做設計校核。');
   if(service==='vacuum'||service==='both'||supplied(p.vacuum)&&Number(p.vacuum)>0)concerns.push('外壓／真空要另做失穩與加強環校核，不能用內壓厚度代替。');
   if(service==='atmospheric'&&pressurized)concerns.push('操作類別選常壓，但已填入正的內壓或外壓差；請核對設計條件。');
-  if(code==='api650'&&(pressurized||p.shape==='elliptical'))concerns.push('目前條件與一般 API 650 槽型／常壓條件不同；須確認適用範圍與附加要求，不能直接判定合規。');
+  if(code==='api650'&&(pressurized||ends.orientation==='horizontal'||ends.bottom!=='flat'||['elliptical','torispherical','hemispherical'].includes(ends.top)))concerns.push('目前條件與一般 API 650 槽型／常壓條件不同；須確認適用範圍與附加要求，不能直接判定合規。');
   return {title,summary,missing,numericIssues,concerns,recorded:!missing.length&&!numericIssues.length,checks:['板厚、腐蝕裕量與材料在設計溫度下的許用值','封頭／底蓋、開孔與補強、接管及支承載荷','液柱、風／地震、外壓失穩與其他設計載荷','焊接程序與人員資格、接縫配置、NDE、熱處理、試驗及洩壓裝置','業主合約、設置地法規、檢查與認證要求'],status:'估料用板厚；尚未完成強度與規範審查'};
 }

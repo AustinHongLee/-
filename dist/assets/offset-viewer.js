@@ -83,7 +83,8 @@ export class OffsetViewer {
         const port=plan.context.ports[end],frame=end==='a'?parts[0].frames[0]:parts.at(-1).frames.at(-1);
         const outward=mul(plan.context.axes[end],end==='a'?1:-1),stub=add(port,mul(outward,-Math.min(this.span/8,plan.params.od*2)));
         this.mesh([{...frame,center:stub},{...frame,center:port}],radius,'#657f98');ring(port,frame,'#fff');
-        this.label(end.toUpperCase()+' 口',add(port,mul(frame.outside,radius*2.2)));
+        // Port tag sits on the existing stub, so it never collides with a short elbow's own tag.
+        this.label(end.toUpperCase()+' 口',add(stub,mul(frame.outside,radius*2.2)));
       }
     }else for(const part of parts){ring(part.frames[0].center,part.frames[0],'#ffd479');ring(part.frames.at(-1).center,part.frames.at(-1),'#ffd479');}
     if(reset)this.fit();
@@ -135,7 +136,7 @@ export class OffsetViewer {
     const center=box.getCenter(new THREE.Vector3()),size=box.getSize(new THREE.Vector3()),span=Math.max(size.x,size.y,size.z,1);
     const plane=this.result?.plane??[0,0,1];
     const normal=this.result?.basis==='ports'?cross(this.result.axes.a,plane):[0,-plane[2],plane[1]];
-    const sight=this.result?.route?new THREE.Vector3(1,-1,.7):this.view==='offset'?new THREE.Vector3(normal[0]+.22,normal[1]-.15,normal[2]+.22):new THREE.Vector3(.3,-1,.3);
+    const sight=this.result?.route?new THREE.Vector3(-1,-1,.85):this.view==='offset'?new THREE.Vector3(normal[0]+.22,normal[1]-.15,normal[2]+.22):new THREE.Vector3(.3,-1,.3);
     sight.normalize();const right=new THREE.Vector3().crossVectors(this.camera.up,sight).normalize(),up=new THREE.Vector3().crossVectors(sight,right).normalize();
     const tan=Math.tan(this.camera.fov*Math.PI/360);let distance=1;
     const include=point=>{const q=point.sub(center),depth=q.dot(sight);distance=Math.max(distance,depth+Math.abs(q.dot(up))/tan,depth+Math.abs(q.dot(right))/(tan*this.camera.aspect));};

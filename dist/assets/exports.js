@@ -3,7 +3,7 @@
  */
 import { validateFabricationPlan, reconcileFitRecords, machiningBudget, fitPointStatus, fitPhaseStatus, createRoughCutTemplate } from './fabrication-plan.js';
 import { computeExactElbowStationTable } from './elbow-geometry.js';
-import { computeExactConicalStationTable,computeExactConicalLocatorTable,conicalDevelopmentToWorld } from './conical-geometry.js';
+import { computeExactConicalStationTable,computeExactConicalLocatorTable,conicalDevelopmentToWorld,conicalPaperToDevelopment } from './conical-geometry.js';
 import { buildElbowWorkOrderHTML,elbowWorkOrderPageRoles } from './elbow-field.js';
 import {ELBOW_ALIGNMENT_MODES} from './elbow-axis.js';
 import {isSteelJoint,steelStationCSV,steelTemplateLegend,steelPaperPositionRecipe,steelWorkOrderPagePlan,buildSteelWorkOrderHTML} from './steel-exports.js';
@@ -435,7 +435,7 @@ export function createConicalOpeningPatch(result,options={}){
   const all=[...footprint,...t.references.filter(r=>r.type==='inner-edge').flatMap(r=>r.points)],minX=Math.min(...all.map(q=>q[0]))-margin,maxX=Math.max(...all.map(q=>q[0]))+margin,minY=Math.min(...all.map(q=>q[1]))-margin,maxY=Math.max(...all.map(q=>q[1]))+margin,b={minX,maxX,minY,maxY},move=q=>[q[0]-minX,q[1]-minY],width=maxX-minX,height=maxY-minY,base=t.mapping.origin??[0,0],origin=[base[0]+minX,base[1]+minY];
   const references=t.references.flatMap(r=>clipPolylineToRectangle(r.points,b).map((points,i)=>({...r,points:points.map(move),label:i?'':r.label,closed:false,labelPosition:null}))),positioning={};
   for(const [name,index]of[['A',0],['B',Math.floor((footprint.length-1)/4)]]){
-    const q=footprint[index],paper=move(q),world=conicalDevelopmentToWorld([q[0]+base[0],q[1]+base[1]],result.params,0,t.mapping.seamAngle),phi=((Math.atan2(world[1],world[2])%(Math.PI*2))+Math.PI*2)%(Math.PI*2),R=Math.hypot(world[1],world[2]),slant=world[0]*result.geometry.conical.s;
+    const q=footprint[index],paper=move(q),world=conicalDevelopmentToWorld(conicalPaperToDevelopment(q,t.mapping),result.params,0,t.mapping.seamAngle),phi=((Math.atan2(world[1],world[2])%(Math.PI*2))+Math.PI*2)%(Math.PI*2),R=Math.hypot(world[1],world[2]),slant=world[0]*result.geometry.conical.s;
     positioning[name]={paper,x:world[0],slant,phiDegrees:phi*180/Math.PI,arc:R*phi};
     references.push({points:[[paper[0]-2,paper[1]],[paper[0]+2,paper[1]]],type:'datum',label:`${name}：S ${fmt(slant,2)} / φ ${fmt(phi*180/Math.PI,2)}°`,labelPosition:[Math.min(width-2,Math.max(2,paper[0])),Math.max(3,paper[1]-4)],textAnchor:paper[0]>width/2?'end':'start'},{points:[[paper[0],paper[1]-2],[paper[0],paper[1]+2]],type:'datum',label:''});
   }
@@ -740,7 +740,8 @@ function statusText(status) {
     error: '錯誤', 'not-assessed': '未評估', info: '資訊', unverified: '未驗證' })[status] ?? String(status ?? '未評估');
 }
 function templateAxes(template) {
-  if(template.mapping?.hostType==='cone'&&template.id.startsWith('main'))return '錐面扇環等距紙樣；A/B 十字按母線距離與截面方位定位';
+  if(template.mapping?.coordinateSystem==='steel-face-physical-development')return `U←沿面距離（右邊起 ${template.mapping.edgeStartId??'起邊'}）；深度↓由自由直端量`;
+  if(template.mapping?.hostType==='cone'&&(template.id.startsWith('main')||template.id==='steel-mother-datum'))return '錐面扇環等距紙樣，文字面朝外；A/B 十字按母線距離與截面方位定位';
   if (template.id === 'main' || template.id === 'main-local' || template.mapping?.coordinateSystem === 'main-outer-wrap' || template.mapping?.coordinateSystem === 'main-outer-local-wrap')
     return 'U→周向逆時針；X↓離基準端';
   if (template.mapping?.paperTransform === 'branch-mirror-x') return `θ←順時針（自由端看接頭）；深度↓${template.mapping.localCuttingWrap ? `定位環距直端 ${fmt(template.mapping.originalDepthOrigin)} mm` : '由自由直端量'}`;

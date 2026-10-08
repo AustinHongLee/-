@@ -88,7 +88,8 @@ export function steelPaperPositionRecipe(template){
   if(m.branchKind!=='steel'||!m.faceId)return null;
   const D=finite(m.datumDepth,'材料面共同基準'),origin=finite(m.depthOrigin,'紙樣上邊位置'),width=finite(m.faceWidth,'材料面寬度');
   const edges=m.paperTransform==='steel-face-mirror-x'?`紙樣右邊對 ${m.edgeStartId}，左邊對 ${m.edgeEndId}；u 在紙上從右往左增加。`:`沿面從 ${m.edgeStartId} 邊到 ${m.edgeEndId} 邊。`;
-  return `找 ${m.faceId} 面（${m.faceRole==='inner'?'內側':'外側'}${m.faceKind==='arc'?'弧面':'平面'}）。全部材料面從同一自由直端沿支材軸量 ${fmt(D)} mm，畫共同 D 基準線；對準紙樣 D 線。${edges}實長 ${fmt(width)} mm${m.faceKind==='arc'?'，用弧長貼合曲面':''}。紙樣上邊距自由直端 ${fmt(origin)} mm；文字面朝材料面外側。同號邊只作對位，母管保持封閉。`;
+  const datum=Number.isFinite(m.sectionRotation)?`截面基準：轉角 0° 時 u 軸指向母材 A／基準端（母材切線投影到支材端面）；由自由端朝接頭看順時針轉 ${fmt(m.sectionRotation)}° 即目前截面，${m.edgeStartId} 依此找到。`:'';
+  return `${datum}找 ${m.faceId} 面（${m.faceRole==='inner'?'內側':'外側'}${m.faceKind==='arc'?'弧面':'平面'}）。全部材料面從同一自由直端沿支材軸量 ${fmt(D)} mm，畫共同 D 基準線；對準紙樣 D 線。${edges}實長 ${fmt(width)} mm${m.faceKind==='arc'?'，用弧長貼合曲面':''}。紙樣上邊距自由直端 ${fmt(origin)} mm；文字面朝材料面外側。同號邊只作對位，母管保持封閉。`;
 }
 
 function sectionIndex(faces,rotation){
@@ -98,7 +99,7 @@ function sectionIndex(faces,rotation){
   const points=paths.flatMap(q=>q.points),xs=points.map(q=>q[0]),ys=points.map(q=>q[1]),
     x0=Math.min(...xs),y0=Math.min(...ys),w=Math.max(...xs)-x0,h=Math.max(...ys)-y0,pad=Math.max(w,h)*.2+5;
   const colours=['#0057b7','#b64200','#4b6b00','#7b267b','#007a73','#9e273b'];
-  return `<figure class="steel-section-index"><svg xmlns="http://www.w3.org/2000/svg" viewBox="${x0-pad} ${y0-pad} ${w+2*pad} ${h+2*pad}" role="img" aria-label="鋼構材料面號索引">${paths.map(({face,points},i)=>{const m=points[Math.floor(points.length/2)];return `<path d="${points.map((q,j)=>`${j?'L':'M'}${q[0]},${q[1]}`).join(' ')}" stroke="${colours[i%colours.length]}" stroke-width="${Math.max(w,h)/100}" fill="none"/><text x="${m[0]}" y="${m[1]}" font-size="${Math.max(w,h)/18}" fill="${colours[i%colours.length]}" text-anchor="middle" paint-order="stroke" stroke="#fff" stroke-width="${Math.max(w,h)/60}">${esc(face.id)}</text>`;}).join('')}</svg><figcaption>從自由端朝接頭看；截面旋轉 ${fmt(rotation)}°。面號索引為示意比例；各面紙樣另印 1:1。</figcaption></figure>`;
+  return `<figure class="steel-section-index"><svg xmlns="http://www.w3.org/2000/svg" viewBox="${x0-pad} ${y0-pad} ${w+2*pad} ${h+2*pad}" role="img" aria-label="鋼構材料面號索引">${paths.map(({face,points},i)=>{const m=points[Math.floor(points.length/2)];return `<path d="${points.map((q,j)=>`${j?'L':'M'}${q[0]},${q[1]}`).join(' ')}" stroke="${colours[i%colours.length]}" stroke-width="${Math.max(w,h)/100}" fill="none"/><text x="${m[0]}" y="${m[1]}" font-size="${Math.max(w,h)/18}" fill="${colours[i%colours.length]}" text-anchor="middle" paint-order="stroke" stroke="#fff" stroke-width="${Math.max(w,h)/60}">${esc(face.id)}</text>`;}).join('')}${(()=>{const y=y0+h+pad*.62,x1=x0+w*.42,x2=x0+w+pad*.72,a=Math.max(w,h)/28,sw=Math.max(w,h)/150;return `<path d="M${x1} ${y}H${x2}" stroke="#55707f" stroke-width="${sw}"/><path d="M${x2} ${y}l${-a} ${-a*.55}v${a*1.1}z" fill="#55707f"/><text x="${x1}" y="${y-a*.5}" font-size="${Math.max(w,h)/20}" fill="#55707f">A／基準端</text>`;})()}</svg><figcaption>從自由端朝接頭看；圖右（→）＝母材 A／基準端方向，截面旋轉 ${fmt(rotation)}°。面號索引為示意比例；各面紙樣另印 1:1。</figcaption></figure>`;
 }
 function motherPages(result,faces,options){
   const p=result.params,count=options.motherFaceSegments??4;
@@ -115,7 +116,7 @@ function motherPages(result,faces,options){
       else{values=[s.index+1,s.faceDistance,finite(m.x,'主管軸距'),finite(m.circumferentialDistance,'主管周向距離'),finite(m.phiDegrees,'主管方位')];}
       return `<tr data-mother-face-station="${esc(s.faceId)}-${s.index}">${values.map((v,i)=>`<td>${i===0?v:fmt(v)}</td>`).join('')}</tr>`;
     });
-  return chunks(source,4).map((sheet,index)=>({role:'mother',title:`母管封閉貼合定位${index?'（續）':''}`,body:`<p class="steel-common-datum">母管不開孔；依面號與沿面距離找到相同支材點，只描貼合位置。${esc(explanation)}</p><div class="steel-face-grid">${sheet.map(({face,rows,index})=>`<article class="steel-face-card"><h2>${esc(face.id)} · ${esc(face.label)}${index?'（續）':''}</h2><p>${esc(face.edgeStartId)} → ${esc(face.edgeEndId)}；每面 ${count} 分段</p><table><thead><tr>${headers.map(h=>`<th>${h}</th>`).join('')}</tr></thead><tbody>${rowsHTML(rows).join('')}</tbody></table></article>`).join('')}</div><p class="steel-scope">線性尺寸單位 mm。表列實際母材外壁位置，已依成品切線的法向間隙返回母面；分點間連線只作定位，須對照支材成品與 3D 試配核對。${elbow?'φ／U 可為負值，表示從外背往相反周向量。':cone?'φ 從母材 A 朝 B 看，0° 位於管頂；U 和 S 不可互換。':'由基準端向另一端看，管頂為 φ＝0°；φ 與 U 沿逆時針增加，兩者使用同一管頂基準。'}定位十字與貼合足跡不是鑽孔或母管裁線。</p>`}));
+  return chunks(source,4).map((sheet,index)=>({role:'mother',title:`母管封閉貼合定位${index?'（續）':''}`,body:`<p class="steel-common-datum">母管不開孔；依面號與沿面距離找到相同支材點，只描貼合位置。${esc(explanation)}</p><div class="steel-face-grid">${sheet.map(({face,rows,index})=>`<article class="steel-face-card"><h2>${esc(face.id)} · ${esc(face.label)}${index?'（續）':''}</h2><p>${esc(face.edgeStartId)} → ${esc(face.edgeEndId)}；每面 ${count} 分段</p><table><thead><tr>${headers.map(h=>`<th>${h}</th>`).join('')}</tr></thead><tbody>${rowsHTML(rows).join('')}</tbody></table></article>`).join('')}</div><p class="steel-scope">線性尺寸單位 mm。表列實際母材外壁位置，已依成品切線的法向間隙返回母面；分點間連線只作定位，須對照支材成品與 3D 試配核對。${elbow?'φ／U 由 A 朝 B 看逆時針為正；可為負值，表示從外背往相反周向量。':cone?'φ 從母材 A 朝 B 看，0° 位於管頂，逆時針為正；U 和 S 不可互換。':'由基準端向另一端看，管頂為 φ＝0°；φ 與 U 沿逆時針增加，兩者使用同一管頂基準。'}定位十字與貼合足跡不是鑽孔或母管裁線。</p>`}));
 }
 function longNotePages(label,text){
   const result=[];let part='',lines=0,column=0;

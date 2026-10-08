@@ -159,7 +159,7 @@ test('full factory route needs three base pages and invalid closure cannot be ex
 
 test('version 4 retains advisory settings, and version 2 migration supplies weld-first defaults',()=>{
   const raw={...input,planMaxJoints:6,planPreference:'compact'},json=offsetProjectJSON(raw);
-  assert.equal(JSON.parse(json).version,4);assert.equal(readOffsetProject(json).params.planMaxJoints,6);
+  assert.equal(JSON.parse(json).version,5);assert.equal(readOffsetProject(json).params.planMaxJoints,6);
   const early=JSON.parse(json);for(const key of ['planAOtherTangent','planBOtherTangent','planExtraInTangent','planExtraOutTangent'])delete early.params[key];
   assert.equal(readOffsetProject(JSON.stringify(early)).params.planAOtherTangent,0);
   const oldKeys=Object.keys(DEFAULT_OFFSET).slice(0,Object.keys(DEFAULT_OFFSET).indexOf('planPreference'));

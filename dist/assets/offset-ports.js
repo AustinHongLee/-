@@ -19,9 +19,12 @@ function solveTangents(D,u,v,specs){
     if(!targets.every(finite))return null;
     return {f:[targets[0]-a,targets[1]-b],angles,w,travel,a,b};
   };
-  const roots=[];
-  for(const factor of [0,.25,.6,1,2,5]){
-    let a=specs[0].kind==='factory'?specs[0].takeout:specs[0].radius*factor,b=specs[1].kind==='factory'?specs[1].takeout:specs[1].radius*factor;
+  const roots=[],seedAngles=[1,3,5,10,15,22.5,30,40,50,60,70,80,85,89].map(d=>Math.tan(rad(d)/2));
+  // Legacy common factors first, then independent per-elbow seeds: an S-curve with two very
+  // different bends (e.g. 5° + 15°) is missed when both takeouts start from the same factor.
+  const seeds=[...[0,.25,.6,1,2,5].map(f=>[f,f]),...seedAngles.flatMap(x=>seedAngles.map(y=>[x,y]))];
+  for(const [fa,fb] of seeds){
+    let a=specs[0].kind==='factory'?specs[0].takeout:specs[0].radius*fa,b=specs[1].kind==='factory'?specs[1].takeout:specs[1].radius*fb;
     for(let iteration=0;iteration<70;iteration++){
       const e=evaluate(a,b);if(!e)break;const norm=length(e.f);
       if(norm<tol){if(!roots.some(r=>length(sub(r.w,e.w))<1e-7))roots.push(e);break;}
@@ -45,7 +48,8 @@ export function computePortOffset(p,cutStations){
   if(!finite(p.od)||typeof p.od!=='number'||p.od<=0||p.od>10000)error('od','實際外徑須為 0–10000 mm 之間的正值。');
   for(const key of ['run','rise',...(p.layout==='rolling'?['roll']:[])])if(typeof p[key]!=='number'||!finite(p[key])||Math.abs(p[key])>1e7)error(key,'X／Y／Z 必須是有限尺寸，絕對值不超過 10000000 mm。');
   if(p.datum==='marks')for(const end of ['a','b'])for(const k of ['X','Y','Z'])if(typeof p[end+'Shift'+k]!=='number'||!finite(p[end+'Shift'+k])||Math.abs(p[end+'Shift'+k])>1e7)error(end+'Shift'+k,'量測點到端面中心的修正量必須是有限尺寸。');
-  for(const key of ['aPortGap','bPortGap','aGap','bGap','aTangent','bTangent','trimA','trimB','minStraight'])if(typeof p[key]!=='number'||!finite(p[key])||p[key]<0||p[key]>1e6)error(key,'焊口間隙、保留端直段、修磨留料與最短管段須為 0–1000000 mm，空白不代表 0。');
+  // A factory elbow has no separate kept-end straight (its Ta reaches the mating face); the hidden field is not validated.
+  for(const key of ['aPortGap','bPortGap','aGap','bGap','aTangent','bTangent','trimA','trimB','minStraight'])if(!(key==='aTangent'&&p.aKind==='factory'||key==='bTangent'&&p.bKind==='factory'))if(typeof p[key]!=='number'||!finite(p[key])||p[key]<0||p[key]>1e6)error(key,'焊口間隙、保留端直段、修磨留料與最短管段須為 0–1000000 mm，空白不代表 0。');
   const specs=[];
   for(const end of ['a','b']){
     const label=end.toUpperCase(),axis=p[end+'Axis'];
@@ -69,12 +73,12 @@ export function computePortOffset(p,cutStations){
       radius=takeout/Math.tan(rad(angle)/2);
       if(radius<=p.od/2)error(end+'Takeout',`${label} 端扣除量所對應的圓弧半徑小於 OD／2，無法預覽。`);
     }
-    specs.push({end:label,kind,radius,takeout,donor:kind==='factory'?p[end+'FactoryAngle']:p[end+'Donor'],gap:p[end+'Gap'],portGap:p[end+'PortGap'],tangent:p[end+'Tangent']});
+    specs.push({end:label,kind,radius,takeout,donor:kind==='factory'?p[end+'FactoryAngle']:p[end+'Donor'],gap:p[end+'Gap'],portGap:p[end+'PortGap'],tangent:kind==='factory'?0:p[end+'Tangent']});
   }
   if(errors.length)return invalid();
   const measured=[p.run,p.layout==='rolling'?p.roll:0,p.rise],shift=end=>p.datum==='marks'?['X','Y','Z'].map(k=>p[end+'Shift'+k]):[0,0,0];
   const ports={a:shift('a'),b:add(measured,shift('b'))},delta=sub(ports.b,ports.a),u=portAxis(p,'a'),v=mul(portAxis(p,'b'),-1);
-  const start=add(ports.a,mul(u,p.aPortGap+p.aTangent)),finish=sub(ports.b,mul(v,p.bPortGap+p.bTangent)),D=sub(finish,start);
+  const start=add(ports.a,mul(u,p.aPortGap+specs[0].tangent)),finish=sub(ports.b,mul(v,p.bPortGap+specs[1].tangent)),D=sub(finish,start);
   context={params:p,ports,delta,measured,axes:{a:u,b:v},specs};
   const roots=solveTangents(D,u,v,specs),positive=roots.filter(e=>e.travel-e.a-e.b-p.aGap-p.bGap>1e-6);
   const solution=positive.find(e=>e.angles.every(t=>t>1e-7&&t<=Math.PI/2+1e-8))??positive[0];
@@ -95,7 +99,7 @@ export function computePortOffset(p,cutStations){
   if(!finite(travel)||travel>1e9)error('run','組立尺寸過大，請核對量測單位。');
   if(errors.length)return invalid();
   const r={valid:true,params:p,errors,context,basis:'ports',ports,measured,delta,start,finish,axes:{a:u,b:v},direction:w,elbows,travel,faceDistance,cutLength,blankLength:cutLength+p.trimA+p.trimB,
-    angle:deg(angles[0]),theta:angles[0],run:delta[0],roll:delta[1],rise:delta[2],offset:Math.hypot(delta[1],delta[2]),rollAngle:deg(Math.atan2(delta[1],delta[2])),
+    angle:deg(angles[0]),theta:angles[0],run:delta[0],roll:delta[1],rise:delta[2],offset:length(sub(delta,mul(u,dot(u,delta)))),rollAngle:deg(Math.atan2(delta[1],delta[2])),
     plane:elbows.a.n,intersections:{a:add(start,mul(u,Ta)),b:sub(finish,mul(v,Tb))},solutionCount:positive.length};
   const endpoint=add(add(add(start,elbowDisplacement(u,elbows.a.n,elbows.a.radius,angles[0])),mul(w,cutLength+p.aGap+p.bGap)),elbowDisplacement(w,unit(sub(v,mul(w,Math.cos(angles[1])))),elbows.b.radius,angles[1]));
   r.closureError=length(sub(endpoint,finish));

@@ -7,10 +7,12 @@ const rad=n=>n*Math.PI/180,deg=n=>n*180/Math.PI;
 const add=(a,b)=>a.map((v,i)=>v+b[i]),sub=(a,b)=>a.map((v,i)=>v-b[i]),mul=(a,k)=>a.map(v=>v*k),dot=(a,b)=>a.reduce((s,v,i)=>s+v*b[i],0),norm=a=>Math.hypot(...a),unit=a=>mul(a,1/norm(a)),clamp=x=>Math.max(-1,Math.min(1,x));
 const frameNormal=(u,v)=>unit(sub(v,mul(u,clamp(dot(u,v)))));
 const bendMove=(u,v,r)=>mul(add(u,v),r*Math.tan(Math.acos(clamp(dot(u,v)))/2));
-const choices=e=>[e.donor,e.donor/2];
+const choices=e=>e.kind==='factory'?[e.donor]:[e.donor,e.donor/2];
 const sameAngle=(a,b)=>Math.abs(a-b)<1e-5;
 export function processClass(angle,donor){return sameAngle(angle,donor)?'full':sameAngle(angle,donor/2)?'half':'special';}
 export const PROCESS_NAMES=Object.freeze({full:'原件整支使用',half:'原彎頭對半切',special:'特殊角度切除'});
+/** Process label for one elbow: a full-angle elbow whose far straight must go is a cut, not a whole-use part. */
+export const processName=e=>e?.trimFar?`角度用滿，弧端切除 ${Number(e.trimFar.toFixed(2))} mm 直段`:PROCESS_NAMES[e?.process]??'';
 export function routeSearchScope(p){
   const valid=Number.isInteger(p.planMaxJoints)&&p.planMaxJoints>=4&&p.planMaxJoints<=24&&[2,3,4].includes(p.planMaxElbows);
   return {valid,effectiveElbows:valid?Math.min(p.planMaxElbows,Math.floor(p.planMaxJoints/2)):0,
@@ -41,7 +43,7 @@ function allocateLengths(cols,D,minimum){
   }
   return solutions.sort((a,b)=>a.reduce((s,v)=>s+v,0)-b.reduce((s,v)=>s+v,0))[0]??null;
 }
-function stockFor(context,count,extra,baseline=false){return Array.from({length:count},(_,i)=>i===0?{...context.specs[0],tangentBefore:context.params.aTangent,tangentAfter:baseline?0:context.params.planAOtherTangent}:i===count-1?{...context.specs[1],tangentBefore:baseline?0:context.params.planBOtherTangent,tangentAfter:context.params.bTangent}:{...extra,tangentBefore:context.params.planExtraInTangent,tangentAfter:context.params.planExtraOutTangent});}
+function stockFor(context,count,extra,baseline=false){const q=context.params,own=(spec,value)=>spec.kind==='factory'?0:value;return Array.from({length:count},(_,i)=>i===0?{...context.specs[0],tangentBefore:own(context.specs[0],context.specs[0].tangent??q.aTangent),tangentAfter:baseline?0:own(context.specs[0],q.planAOtherTangent),farTangent:baseline?own(context.specs[0],q.planAOtherTangent):0}:i===count-1?{...context.specs[1],tangentBefore:baseline?0:own(context.specs[1],q.planBOtherTangent),tangentAfter:own(context.specs[1],context.specs[1].tangent??q.bTangent),farTangent:baseline?own(context.specs[1],q.planBOtherTangent):0}:{...extra,tangentBefore:q.planExtraInTangent,tangentAfter:q.planExtraOutTangent});}
 function partsPattern(dirs,stocks,lead,tail){
   const parts=[];
   if(lead)parts.push({type:'pipe',direction:dirs[0],slot:0});
@@ -49,7 +51,7 @@ function partsPattern(dirs,stocks,lead,tail){
     const u=dirs[i],v=dirs[i+1],theta=Math.acos(clamp(dot(u,v)));if(theta<1e-7||theta>Math.PI/2+1e-7)return null;
     const stock=stocks[i],angle=deg(theta);if(angle>stock.donor+1e-5)return null;
     const process=processClass(angle,stock.donor),retain=i===stocks.length-1?'outlet':'inlet';
-    parts.push({type:'elbow',...stock,index:i,angle,theta,u,v,n:frameNormal(u,v),process,retain,
+    parts.push({type:'elbow',...stock,index:i,angle,theta,u,v,n:frameNormal(u,v),process,retain,trimFar:process==='full'&&stock.farTangent>0?stock.farTangent:0,
       tangentBefore:retain==='outlet'&&process!=='full'?0:stock.tangentBefore,tangentAfter:retain==='inlet'&&process!=='full'?0:stock.tangentAfter});
     if(i<stocks.length-1)parts.push({type:'pipe',direction:v,slot:i+1});
   }
@@ -76,7 +78,7 @@ function routeFromParts(context,parts,lengths,original=false){
     current=add(arcFinish,mul(part.v,part.tangentAfter));
     const e={...part,id:'E'+(++elbowIndex),end:'E'+elbowIndex,start,arcStart,arcFinish,finish:[...current],tangent:part.tangentBefore+part.tangentAfter};
     e.innerArc=(e.radius-p.od/2)*e.theta;e.centerArc=e.radius*e.theta;e.outerArc=(e.radius+p.od/2)*e.theta;
-    e.kind=e.process==='full'?'factory':'cut';e.stations=e.kind==='cut'?elbowCutStations(e.radius,p.od,Math.min(e.angle,e.donor),p.stations,e.donor):[];
+    e.kind=e.process==='full'&&!e.trimFar?'factory':'cut';e.stations=e.kind==='cut'?elbowCutStations(e.radius,p.od,Math.min(e.angle,e.donor),p.stations,e.donor):[];
     return e;
   });
   const j=joints.at(-1);Object.assign(j,{id:'J'+joints.length,start:[...current],finish:add(current,mul(j.direction,j.amount))});

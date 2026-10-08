@@ -50,7 +50,7 @@ test('blank or invalid sizes, unknown fields, duplicate ids or duplicate locatio
   assert.equal(computeOffset({...input,components:[component({length:null})]}).valid,false);
 });
 test('v4 projects preserve full measured component inputs and v3 projects migrate to an empty list',()=>{
-  const json=offsetProjectJSON({...input,components:[component()]});const data=JSON.parse(json);assert.equal(data.version,4);assert.deepEqual(readOffsetProject(json).params.components,[component()]);
+  const json=offsetProjectJSON({...input,components:[component()]});const data=JSON.parse(json);assert.equal(data.version,5);assert.deepEqual(readOffsetProject(json).params.components,[component()]);
   const old=JSON.parse(offsetProjectJSON(input));old.version=3;delete old.params.components;assert.deepEqual(readOffsetProject(JSON.stringify(old)).params.components,[]);
   data.params.components[0].length=null;assert.throws(()=>readOffsetProject(JSON.stringify(data)));
 });

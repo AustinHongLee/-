@@ -131,7 +131,14 @@ function createHost(p,section) {
     if(p.hostType==='cone'){const q=conicalCoordinates(point,p),k=(p.mainEndOD-p.mainOD)/(2*p.mainLength),phi=wrap(q.phi);return {x:q.x,slantDistance:q.x*Math.hypot(1,k),phiDegrees:phi*180/Math.PI,circumferentialDistance:q.radius*phi,developed:conicalDevelopmentPoint(point,p)};}
     const q=rotateAroundMain(point,-p.azimuth),phi=wrap(Math.atan2(point[1],point[2]));return {x:q[0],phiDegrees:phi*180/Math.PI,circumferentialDistance:R*phi,developed:[R*unwrap(Math.atan2(q[1],q[2]),0)+Math.PI*R,q[0]]};
   };
-  return {R,Ri,origin,d,T,N,e0,e90,u,v,foot,near,checkRetained,coordinates,reference,finite};
+  // Foot of the true surface normal through a finished cut point (on the rootGap offset surface): the mother mark
+  // lies directly under the member edge, so an even gap measured with a gauge sits on the traced line.
+  const normalFoot=point=>{
+    if(p.hostType==='elbow'){const Rc=p.bendRadius,x=point[0],y=point[1]-Rc,planar=Math.hypot(x,y),c=[x/planar*Rc,y/planar*Rc+Rc,0],off=sub(point,c);return add(c,mul(off,R/norm(off)));}
+    if(p.hostType==='cone'){const q=conicalCoordinates(point,p,p.rootGap);return sub(point,mul(q.normal,p.rootGap));}
+    const rho=Math.hypot(point[1],point[2]);return [point[0],point[1]*R/rho,point[2]*R/rho];};
+  const surfaceContact=(q,cut,hint)=>p.rootGap>0?{point:normalFoot(cut.point),residual:0}:near(q,0,hint);
+  return {R,Ri,origin,d,T,N,e0,e90,u,v,foot,near,checkRetained,coordinates,reference,finite,normalFoot,surfaceContact};
 }
 
 function faceHint(face,s){return face.kind==='arc'?{radius:face.radius,angle:face.startAngle+face.sweep*s/face.length}:undefined;}
@@ -184,8 +191,8 @@ function build(raw) {
       roundTrip=Math.max(roundTrip,distance(back,point));return coordinates.developed;
     };
     faces=section.faces.map(face=>{
-      const grid=faceGrid(face,p,host,section),stations=grid.map(s=>{const q=sectionPointAt(face,s),hint=faceHint(face,s),cut=checkedNear(q,p.rootGap,hint,face.id),contact=checkedNear(q,0,hint,face.id),developed=checkMotherCoordinates(contact.point);cutMax=Math.max(cutMax,cut.t);cutMin=Math.min(cutMin,cut.t);residual=Math.max(residual,Math.abs(cut.residual),Math.abs(contact.residual));return {faceDistance:s,sectionPoint:q,cut,contact,developed};});
-      for(let i=1;i<stations.length;i++)for(const fraction of FRACTIONS){const s=grid[i-1]+(grid[i]-grid[i-1])*fraction,q=sectionPointAt(face,s),cut=checkedNear(q,p.rootGap,faceHint(face,s),face.id),contact=checkedNear(q,0,faceHint(face,s),face.id);
+      const grid=faceGrid(face,p,host,section),stations=grid.map(s=>{const q=sectionPointAt(face,s),hint=faceHint(face,s),cut=checkedNear(q,p.rootGap,hint,face.id),contact=p.rootGap>0?host.surfaceContact(q,cut,hint):checkedNear(q,0,hint,face.id),developed=checkMotherCoordinates(contact.point);cutMax=Math.max(cutMax,cut.t);cutMin=Math.min(cutMin,cut.t);residual=Math.max(residual,Math.abs(cut.residual),Math.abs(contact.residual));return {faceDistance:s,sectionPoint:q,cut,contact,developed};});
+      for(let i=1;i<stations.length;i++)for(const fraction of FRACTIONS){const s=grid[i-1]+(grid[i]-grid[i-1])*fraction,q=sectionPointAt(face,s),cut=checkedNear(q,p.rootGap,faceHint(face,s),face.id),contact=p.rootGap>0?host.surfaceContact(q,cut,faceHint(face,s)):checkedNear(q,0,faceHint(face,s),face.id);
         chord=Math.max(chord,distance(cut.point,lerp(stations[i-1].cut.point,stations[i].cut.point,fraction)),Math.abs(cut.t-(stations[i-1].cut.t+(stations[i].cut.t-stations[i-1].cut.t)*fraction)),distance(contact.point,lerp(stations[i-1].contact.point,stations[i].contact.point,fraction)));
         const developed=checkMotherCoordinates(contact.point);
         if(developed)motherPaperChord=Math.max(motherPaperChord,distance(developed,lerp(stations[i-1].developed,stations[i].developed,fraction)));
@@ -222,7 +229,7 @@ function build(raw) {
         references:[{type:'cut-line',points:curve,label:'端部成品切線'},{type:'datum',points:[[0,datumDepth-depthOrigin],[face.length,datumDepth-depthOrigin]],label:`D ${datumDepth} mm：由自由直端量`},
           {type:'seam',points:[[0,0],[0,height]],label:face.edgeEndId},{type:'seam',points:[[face.length,0],[face.length,height]],label:face.edgeStartId}],
         notes:['母管保持封閉；本圖只切鋼構端部，不得據此在母管挖孔。',`此面為 ${face.label}，文字面朝材料外側；紙樣左／右邊分別 ${face.edgeEndId}／${face.edgeStartId}，沿面 u 從右邊向左增加。`,`全部材料面共用同一自由直端及 D ${datumDepth} mm 基準，不能各面重設切深零。`,'圓角依輸入實測半徑；不是熱軋型錄預設形狀。','未含坡口、砂輪刀縫、粗切留料、焊接收縮或承載驗證。'],
-        mapping:{coordinateSystem:'steel-face-physical-development',branchKind:'steel',hostType:p.hostType,motherOpening:false,faceId:face.id,faceKind:face.kind,faceRole:face.role,edgeStartId:face.edgeStartId,edgeEndId:face.edgeEndId,paperLeftEdge:face.edgeEndId,paperRightEdge:face.edgeStartId,paperTransform:'steel-face-mirror-x',faceWidth:face.length,depthOrigin,datumDepth,freeEndDepth:0,origin:[0,depthOrigin],axisEnd:endT}};
+        mapping:{coordinateSystem:'steel-face-physical-development',branchKind:'steel',hostType:p.hostType,motherOpening:false,faceId:face.id,faceKind:face.kind,faceRole:face.role,edgeStartId:face.edgeStartId,edgeEndId:face.edgeEndId,paperLeftEdge:face.edgeEndId,paperRightEdge:face.edgeStartId,paperTransform:'steel-face-mirror-x',sectionRotation:p.sectionRotation,faceWidth:face.length,depthOrigin,datumDepth,freeEndDepth:0,origin:[0,depthOrigin],axisEnd:endT}};
     });
     if(p.hostType!=='elbow') {
       const mirrorCone=p.hostType==='cone'&&p.mainEndOD>p.mainOD,
@@ -267,6 +274,6 @@ export function computeSteelFaceStations(input,faceId,count=12) {
   if(!result.valid||!result.geometry?.steel)throw new RangeError('無效鋼構接頭不能產生材料面分點。');
   const face=result.geometry.steel.section.faces.find(face=>face.id===faceId);if(!face)throw new RangeError('找不到材料面。');
   const host=createHost(result.params,result.geometry.steel.section),endT=result.geometry.steel.axisEnd;
-  return Array.from({length:count+1},(_,index)=>{const s=face.length*index/count,q=sectionPointAt(face,s),cut=host.near(q,result.params.rootGap,faceHint(face,s)),contact=host.near(q,0,faceHint(face,s));
+  return Array.from({length:count+1},(_,index)=>{const s=face.length*index/count,q=sectionPointAt(face,s),cut=host.near(q,result.params.rootGap,faceHint(face,s)),contact=host.surfaceContact(q,cut,faceHint(face,s));
     return {faceId,index,faceDistance:s,depth:endT-cut.t,point:cut.point,contactPoint:contact.point,sectionPoint:q,motherLocator:host.coordinates(contact.point)};});
 }

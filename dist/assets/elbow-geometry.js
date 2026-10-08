@@ -208,10 +208,13 @@ function createModel(p) {
         s2=advance*(2*Rc+h+u),planarTolerance=2*(Rc+minor)*1e-10;
       if(s2<-planarTolerance)throw new Error('支管輪廓超出此管壁的可交合範圍，無法形成封閉交線。');
       const along=Math.sqrt(Math.max(0,s2)),point=add(add(reference.center,mul(reference.normal,u)),add([0,0,z],mul(reference.direction,along))),
-        t=dot(sub(point,f),d),info=torusCoordinates(point,Rc),normalDotDirection=dot(info.normal,d);
+        t=dot(sub(point,f),d),info=torusCoordinates(point,Rc),
+        // Analytic n·d on the end-parallel line (d = port axis): h·along/(minor·ρ) ≥ 0. A numeric dot product is
+        // ~1e-16 at a ±Z side contact and its random sign rejected valid joints (or let them pass but not print).
+        normalDotDirection=h*along/(minor*Math.hypot(Rc+u,along));
       if(h2<=0||s2<=0||normalDotDirection<=0) {
         const contact=add(reference.center,mul(add(mul(reference.normal,edgeBack),[0,0,edgeSide]),R));
-        const isolatedPortContact=D>1e-9&&Math.abs(radius-ro)<1e-9&&Math.abs(minor-R)<1e-9&&edgeBack>=-1e-12&&distance(point,contact)<1e-5;
+        const isolatedPortContact=D>1e-9&&Math.abs(radius-ro)<1e-9&&Math.abs(minor-R)<1e-9&&edgeBack>=-1e-12&&(distance(point,contact)<1e-5||Math.abs(delta)<1e-9);
         if(!isolatedPortContact)throw new Error('此相切交線未形成孤立且連續的管口貼合點，不能製作。');
       }
       if(!finite(point))throw new Error('支管切口或主管開孔跨出有限彎頭端部。');
@@ -307,7 +310,7 @@ function build(raw) {
     const ring=angles.slice(0,-1).map(theta=>cut?model.cut(radius,theta):model.near(radius,minor,theta));
     ring.push({...ring[0],point:[...ring[0].point]});return ring;
   };
-  let outer,inner,holeOuter=[],holeInner=[],contactOuter=[],contactInner=[],endT,maximumDepth,sampledMaxChordError=0,minimumProjectionClearance=Infinity;
+  let outer,inner,holeOuter=[],holeInner=[],contactOuter=[],contactInner=[],endT,maximumDepth,sampledMaxChordError=0,minimumProjectionClearance=Infinity,interiorMaxT=-Infinity;
   const wallRadii=[model.ri,(3*model.ri+model.ro)/4,(model.ri+model.ro)/2,(model.ri+3*model.ro)/4,model.ro];
   // Probe each branch segment internally too; collision checks must not rely
   // on mesh endpoints (e.g. 37 stations miss the true 90 degree tip limit).
@@ -354,7 +357,7 @@ function build(raw) {
     // Remote full-torus roots outside the real elbow's arc never count.
     const checkWall=(radius,theta)=>{
       const f=model.foot(radius,theta),nearOuter=model.near(radius,model.R,theta),nearInner=p.jointType==='in'?model.near(radius,model.Ri,theta):null;
-      const cut=model.cut(radius,theta),caps=model.endPlanes(f);
+      const cut=model.cut(radius,theta),caps=model.endPlanes(f);interiorMaxT=Math.max(interiorMaxT,cut.t);
       // A doubly curved mother can have a maximum cut depth inside the
       // annular wall, even when both face contours stop before the free end.
       // Treat sampled zero/negative retained length as a real invalid body.
@@ -493,7 +496,8 @@ function build(raw) {
     '彎頭採理想環面；外背法線管身以單調距離排除再入壁，伸入餘裕仍用有限壁厚站探查；現場成形偏差與全壁厚粗切包絡未納入。':
     '彎頭採理想環面；現場成形偏差與全壁厚干涉僅有限採樣檢查，未構成嚴格全域包絡證明。');
   if(p.offset||p.azimuth||p.jointPosition!==DEFAULT_ELBOW_PARAMS.jointPosition)warnings.push('彎頭使用彎曲位置／截面方位／支管旋向；直管偏心、方位與 J 參數未套用。');
-  const measurements={mainCircumference:TAU*model.R,branchCircumference:C,branchMinLength:p.branchLength,
+  // Swivelled thick walls can cut deepest INSIDE the wall: report the shortest retained length actually probed.
+  const measurements={mainCircumference:TAU*model.R,branchCircumference:C,branchMinLength:Number.isFinite(interiorMaxT)?Math.min(p.branchLength,endT-interiorMaxT):p.branchLength,
     branchMaxLength:maximumDepth,branchAxisEnd:endT,branchOuterCutLength:perimeter(outerCut),branchInnerCutLength:perimeter(innerCut),
     mainHoleToolDiameter:opening?2*tool:null,mainHoleAxialLength:null,mainHoleArcWidth:null,padMinimumMargin:null,padNetArea:0,padNeutralRadius:null,
     projectionAvailable:minimumProjectionClearance<Infinity?minimumProjectionClearance:null,

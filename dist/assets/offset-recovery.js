@@ -13,7 +13,7 @@ export function offsetFieldRoute(field,p,{sharedStock=false}={}){
 function parallelSpace(r){
  const c=r.context;if(!c)return '';
  const u=c.axes.a,v=c.axes.b;if(u.some((x,i)=>Math.abs(x-v[i])>1e-8))return '';
- const forward=c.delta.reduce((s,x,i)=>s+x*u[i],0)-c.params.aPortGap-c.params.bPortGap-c.params.aTangent-c.params.bTangent,
+ const forward=c.delta.reduce((s,x,i)=>s+x*u[i],0)-c.params.aPortGap-c.params.bPortGap-(c.specs[0].tangent??0)-(c.specs[1].tangent??0),
        axial=c.delta.reduce((s,x,i)=>s+x*u[i],0),side=Math.hypot(...c.delta.map((x,i)=>x-axial*u[i])),sum=c.specs.reduce((s,e)=>s+e.radius,0);
  // A necessary bound for parallel ends when the transverse distance >= sum of radii.
  if(side>=sum&&forward<sum)return `沿管軸扣除端部間隙與直段後只有 ${fmt(forward)} mm；這兩支彎頭即使用到 90°，也至少需 ${fmt(sum)} mm 的軸向空間。`;

@@ -91,7 +91,7 @@ export function createRoughCutTemplate(base,plan) {
     mapping:{...m,roughStock:p.stock,roughDepths:rough.map(([x,y])=>[c-x,y+top]),roughEnvelopeBasis:'straight-host-radial-through-branch-wall'}};
 }
 export function fabricationCSV(plan,stations,options={}) {
-  const p=validateFabricationPlan(plan),safe=s=>{const text=String(s??'');return '"'+(/^\s*[=+@\-]/.test(text)?"'"+text:text).replaceAll('"','""')+'"';};
+  const p=validateFabricationPlan(plan),safe=s=>{const text=String(s??'');return '"'+(/^\s*[=+@\-]/.test(text)&&!/^\s*[-+]?(\d+\.?\d*|\.\d+)([eE][-+]?\d+)?\s*$/.test(text)?"'"+text:text).replaceAll('"','""')+'"';};
   if(!Array.isArray(stations)||stations.length<p.count||stations.slice(0,p.count).some((s,i)=>!s||!Number.isFinite(s.angle)||Math.abs(s.angle-i*360/p.count)>1e-7||!Number.isFinite(s.outerDepth)||!Number.isFinite(s.innerDepth))) throw new Error('尺寸分點須與實測分點角度一致。');
   const rows=[['加工與試配紀錄（未填值為未知；範圍核對不代表焊接核准）'],['加工工具',p.tool],['沿軸粗切留料 mm',p.stock??''],['預估標線最大沿軸偏差 ±mm',p.markError??''],['預估切磨最大沿軸偏差 ±mm',p.cutError??''],['實測切縫寬度 mm',p.kerf??''],['坡口單邊角 °（工藝記錄）',p.bevelAngle??''],['鈍邊 mm（工藝記錄）',p.rootFace??''],['切口狀況',p.edgeCondition],['焊道／點固／順序記錄',p.weldNote],['修整／修復處置紀錄',p.disposition],[],['分點角度 °','成品外緣深度 mm','成品內緣深度 mm','粗切深度 mm（沿支管軸）','試配根隙 mm','點固後根隙 mm','點固參考','工法編號/版次','根隙量測方向/位置','根隙下限 mm','根隙上限 mm','試配記錄狀態','點固後記錄狀態']];
   const roughSupported=options.roughCutSupported!==false&&!stations.some(s=>['elbow','cone'].includes(s?.hostType));

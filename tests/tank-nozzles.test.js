@@ -28,9 +28,9 @@ test('flat-end nozzle coordinates, wall deduction and angle orientation match as
   const b=plan({host:'bottom',radius:100,angle:180},{shape:'flat'}).nozzlePlan.items[0];close(b.surface[2],-100);close(b.face[1],-200);assert.deepEqual(b.direction,[0,-1,0]);
   assert.equal(plan({angle:360}).nozzlePlan.items[0].angle,0);
 });
-test('missing flat covers, curved heads and out-of-bound holes reject nozzle exports while retaining valid tank estimates',()=>{
+test('missing covers and out-of-bound holes (flat or curved ends) reject nozzle exports while retaining valid tank estimates',()=>{
   for(const [data,tank,field] of [
-    [{host:'top'},{},'host'],[{host:'top'},{shape:'elliptical'},'host'],[{height:5},{},'height'],
+    [{host:'top'},{},'host'],[{host:'top',radius:590},{shape:'elliptical'},'radius'],[{height:5},{},'height'],
     [{height:1995},{},'height'],[{host:'bottom',radius:590},{},'radius'],[{inside:1200},{},'inside'],
     [{projection:40},{},'projection'],[{od:1200,flangeOD:1500},{},'od']
   ]){const r=plan(data,tank);assert.equal(r.valid,true);assert.equal(r.nozzlePlan.valid,false);assert.ok(r.nozzlePlan.issues.some(i=>i.field===field));assert.throws(()=>tankCSV(r),/管嘴/);assert.throws(()=>tankWorkOrder(r),/管嘴/);}

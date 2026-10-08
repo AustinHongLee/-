@@ -1,4 +1,4 @@
-import {NOZZLE_DEFAULTS,NOZZLE_HOSTS,nozzleFieldLabel} from './tank-nozzles.js';
+import {NOZZLE_DEFAULTS,nozzleHostLabel,nozzleFieldLabel} from './tank-nozzles.js';
 import {nozzleLayoutSketch} from './tank-nozzle-visuals.js';
 import {esc,fmt} from './tank-visuals.js';
 import {TankFlangeUI} from './tank-flange-ui.js';
@@ -8,11 +8,13 @@ export class TankNozzleUI{
     this.compact=matchMedia('(max-width:500px)');this.compact.addEventListener('change',()=>{if(this.result)this.render(this.result);});
     this.flangeUI=new TankFlangeUI({form,current:()=>this.current(),onChange:()=>{this.onChange();this.sync();}});
     form.addEventListener('click',event=>{
-      const button=event.target.closest('[data-nozzle-add],[data-nozzle-select],[data-nozzle-remove],[data-nozzle-host],[data-nozzle-issue],#tank-nozzle-3d,[data-nozzle-shape]');if(!button)return;
+      const button=event.target.closest('[data-nozzle-add],[data-nozzle-select],[data-nozzle-remove],[data-nozzle-host],[data-nozzle-kind],[data-nozzle-issue],#tank-nozzle-3d,[data-nozzle-shape]');if(!button)return;
       if(button.hasAttribute('data-nozzle-add')){if(this.items.length>=30)return;const id='N'+(Math.max(0,...this.items.map(n=>Number(n.id.slice(1))))+1);this.items.push({...NOZZLE_DEFAULTS,id,name:'新管嘴',height:Number(Math.min(300,(this.result?.bodyHeight??2000)/2).toFixed(2))});this.selected=id;this.onChange();this.sync();this.onSelect(id);}
       else if(button.dataset.nozzleSelect)this.select(button.dataset.nozzleSelect);
       else if(button.hasAttribute('data-nozzle-remove')){this.items=this.items.filter(n=>n.id!==this.selected);this.selected=this.items[0]?.id??null;this.onChange();this.sync();this.onSelect(this.selected);}
       else if(button.dataset.nozzleHost){const n=this.current();if(n){n.host=button.dataset.nozzleHost;this.onChange();this.sync();}}
+      // Manhole: example neck / flange sizes so the cover can be estimated at once (verify against the drawing).
+      else if(button.dataset.nozzleKind){const n=this.current();if(n){n.kind=button.dataset.nozzleKind;if(n.kind==='manhole'&&Number(n.od)<400)Object.assign(n,{od:508,thickness:8,projection:250,flangeOD:700,flangeThickness:40,flangeLength:120,flangeWeight:0,flangeSource:'manual',name:!n.name||n.name==='新管嘴'?'人孔':n.name});this.onChange();this.sync();}}
       else if(button.dataset.nozzleIssue){this.select(button.dataset.nozzleIssue);const field=this.form.querySelector(`[data-nozzle-field="${button.dataset.field}"]`)??this.form.querySelector('[data-nozzle-host]');for(let parent=field?.parentElement;parent;parent=parent.parentElement)if(parent.tagName==='DETAILS')parent.open=true;field?.focus();field?.scrollIntoView({behavior:'smooth',block:'center'});}
       else if(button.dataset.nozzleShape)onShape(button.dataset.nozzleShape);
       else if(button.id==='tank-nozzle-3d')on3D();
@@ -46,7 +48,7 @@ export class TankNozzleUI{
   render(r){
     this.result=r;const $=id=>document.getElementById(id),n=this.current(),plan=r?.nozzlePlan;
     $('tank-nozzle-editor').hidden=!n;$('tank-nozzle-empty').hidden=!!this.items.length;$('tank-nozzle-add').disabled=this.items.length>=30;
-    $('tank-nozzle-list').innerHTML=this.items.map(item=>`<button type="button" data-nozzle-select="${item.id}" aria-pressed="${item.id===this.selected}"><strong>${item.id} ${esc(item.name||'未命名')}</strong><small>${NOZZLE_HOSTS[item.host]} · Ø ${esc(item.od)} mm</small></button>`).join('');
+    $('tank-nozzle-list').innerHTML=this.items.map(item=>`<button type="button" data-nozzle-select="${item.id}" aria-pressed="${item.id===this.selected}"><strong>${item.id} ${esc(item.name||'未命名')}</strong><small>${item.kind==='manhole'?'人孔 · ':''}${esc(nozzleHostLabel(item.host,r))} · Ø ${esc(item.od)} mm${Number(item.padOD)>0?' · 補強板':''}</small></button>`).join('');
     $('tank-nozzle-location').innerHTML=nozzleLayoutSketch(r,{selected:this.selected,interactive:!!n,compact:this.compact.matches});
     $('tank-nozzle-summary').innerHTML=plan?`<strong>${plan.count} 個管嘴 · ${plan.flangeCount} 只法蘭</strong><p>管料最長包絡＋留料共 ${fmt(plan.pipeBlankLength,2)} mm；已知附件估重 ${fmt(plan.extraWeight)} kg${plan.unknownFlangeWeight?'，'+plan.unknownFlangeWeight+' 只法蘭單重未計':''}。${!plan.valid?'尚有管嘴資料待修正，合計僅含可計算部分。':''}</p>`:'<p>先修正桶槽尺寸。</p>';
     for(const field of this.form.querySelectorAll('[data-nozzle-field]'))field.removeAttribute('aria-invalid');
@@ -54,9 +56,12 @@ export class TankNozzleUI{
     if(!n){$('tank-nozzle-cut').replaceChildren();return;}
     this.flangeUI.render(n);
     $('tank-nozzle-editor-title').textContent=n.id+' · 尺寸與接法';
-    for(const button of this.form.querySelectorAll('[data-nozzle-host]'))button.setAttribute('aria-pressed',String(button.dataset.nozzleHost===n.host));
+    for(const button of this.form.querySelectorAll('[data-nozzle-host]')){button.setAttribute('aria-pressed',String(button.dataset.nozzleHost===n.host));button.textContent=nozzleHostLabel(button.dataset.nozzleHost,r);}
+    for(const button of this.form.querySelectorAll('[data-nozzle-kind]'))button.setAttribute('aria-pressed',String(button.dataset.nozzleKind===(n.kind??'nozzle')));
+    $('tank-nozzle-manhole').hidden=n.kind!=='manhole';
+    const heightLabel=$('tank-nozzle-height-field');if(heightLabel?.firstChild)heightLabel.firstChild.textContent=r?.orientation==='horizontal'?'距筒身 A 端板邊 mm':'距筒身板下緣 mm';
     $('tank-nozzle-height-field').hidden=n.host!=='shell';$('tank-nozzle-radius-field').hidden=n.host==='shell';$('tank-nozzle-flange-fields').hidden=n.end==='bare';$('tank-nozzle-weld-gap-field').hidden=n.end!=='wn';
-    $('tank-nozzle-flat-recovery').hidden=!(n.host==='top'&&r?.input.shape==='open');
+    $('tank-nozzle-flat-recovery').hidden=!(n.host==='top'&&r?.endTypes?.top==='open');
     for(const issue of plan?.issues??[])if(issue.id===n.id)this.form.querySelector(`[data-nozzle-field="${issue.field}"]`)?.setAttribute('aria-invalid','true');
     const item=plan?.items.find(item=>item.id===n.id);$('tank-nozzle-cut').innerHTML=item?`<div class="tank-nozzle-readback"><strong>管料先備 ${fmt(item.blankLength,2)} mm</strong><p>${item.host==='shell'?'魚口端':'平口端'}最短／最長 ${fmt(item.minCutLength,2)} / ${fmt(item.maxCutLength,2)} mm，總修整留料 ${fmt(item.allowance)} mm。${item.shellPiece?'開孔中心在 '+item.shellPiece+'。':''}</p><p>管段估重 ${fmt(item.pipeWeight,2)} kg${item.end!=='bare'?'；法蘭 '+(item.flangeWeight>0?fmt(item.flangeWeight,2)+' kg':'單重待提供'):''}。</p>${item.warnings.map(message=>'<p class="tank-nozzle-warning">'+esc(message)+'</p>').join('')}</div>`:'<p class="tank-note">修正上方管嘴資料後，尺寸圖會更新。</p>';
   }

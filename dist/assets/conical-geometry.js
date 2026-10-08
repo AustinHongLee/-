@@ -20,6 +20,8 @@ export function conicalDevelopmentPoint(point,params,normalOffset=0,seamAngle=ra
   const {R0,k,s}=shape(params),phi=unwrap(Math.atan2(point[1],point[2]),seamAngle+Math.PI),rho=(R0+k*point[0]+normalOffset*s)*s/Math.abs(k),a=(phi-seamAngle)*Math.abs(k)/s;
   return [rho*Math.cos(a),rho*Math.sin(a)];
 }
+/** Paper coordinates of a printed cone template (after its origin shift) back to raw development coordinates. */
+export function conicalPaperToDevelopment(point,mapping={}){const base=mapping.origin??[0,0],q=[point[0]+base[0],point[1]+base[1]];return mapping.developmentMirrorX?[-q[0],q[1]]:q;}
 export function conicalDevelopmentToWorld(point,params,normalOffset=0,seamAngle=rad(params.surfaceClock??0)-Math.PI){
   const {R0,k,s}=shape(params),rho=norm(point),a=wrap(Math.atan2(point[1],point[0])),x=(rho*Math.abs(k)/s-R0-normalOffset*s)/k,phi=seamAngle+a*s/Math.abs(k);
   return conicalSurfacePoint(x,phi,params,normalOffset);
@@ -104,10 +106,14 @@ function build(raw){const {p,errors}=validate(raw),warnings=[],fail=(field,messa
   const branch={id:'branch',title:'大小頭母材／直支管 fishmouth 樣板',basis:'直支管實際外徑包覆',outer:branchOutline,holes:[],references:[{points:innerCurve,type:'inner-edge',label:'內緣對應角度參考（非內徑展開）'},{points:[[0,0],[0,endT-outer[0].t]],type:'seam',label:'0° 起縫基準'}],width:C,height:maxDepth,
     notes:['錐管採兩端外徑間的理想直線錐面；壁厚為真實法向厚度。','0° 為 −當地母線在支管橫截面的投影；站角沿既定 station90 方向增加。','未包含坡口、刀縫、焊接收縮、實物轉接圓弧或橢圓度。',...(opening?[]:['外焊支撐：母材保持封閉，貼合輪廓禁止當開孔切線。'])],mapping:{coordinateSystem:'branch-outer-wrap',circumference:C,axisEnd:endT,origin:[0,0],hostType:'cone'}};
   const sectorAngle=TAU*Math.abs(m.k)/m.s,rho0=m.R0*m.s/Math.abs(m.k),rho1=m.R1*m.s/Math.abs(m.k),rhoMin=Math.min(rho0,rho1),rhoMax=Math.max(rho0,rho1),seam=m.phi-Math.PI;
-  const developedBoundary=close([...Array.from({length:n+1},(_,i)=>[rhoMax*Math.cos(sectorAngle*i/n),rhoMax*Math.sin(sectorAngle*i/n)]),...Array.from({length:n+1},(_,i)=>[rhoMin*Math.cos(sectorAngle*(n-i)/n),rhoMin*Math.sin(sectorAngle*(n-i)/n)])]);
-  const actualOuter=opening?holeOuter:contactOuter,actualInner=opening?holeInner:contactInner,outerUV=actualOuter.map(q=>q.uv),innerOnOuter=actualInner.map(q=>conicalDevelopmentPoint(conicalSurfacePoint(q.point[0],q.phi,p),p));
-  const references=[{points:[[rho0,0],[rho1,0]],type:'seam',label:'A → B 起縫基準'},{points:innerOnOuter,type:'inner-edge',label:opening?'內壁孔口投影參考（非切線）':'支管內緣貼合參考（禁止開孔）'}];if(!opening)references.push({points:outerUV,type:'datum',label:'支管外緣貼合定位（禁止開孔）',closed:true});
-  const mapping={coordinateSystem:'conical-outer-isometric-development',hostType:'cone',motherOpening:opening,seamAngle:seam,sectorAngle,slantRadii:[rho0,rho1],k:m.k,s:m.s,normalOffset:0};
+  // The isometric development keeps the angle sign of |k|. When the cone grows toward B (k>0)
+  // that map is orientation-reversing for a text-out wrap, so the printed paper is mirrored in x.
+  // Callers that map paper back to the cone must undo it (see conicalPaperToDevelopment).
+  const mirrorX=m.k>0,flip=q=>mirrorX?[-q[0],q[1]]:q;
+  const developedBoundary=close([...Array.from({length:n+1},(_,i)=>[rhoMax*Math.cos(sectorAngle*i/n),rhoMax*Math.sin(sectorAngle*i/n)]),...Array.from({length:n+1},(_,i)=>[rhoMin*Math.cos(sectorAngle*(n-i)/n),rhoMin*Math.sin(sectorAngle*(n-i)/n)])].map(flip));
+  const actualOuter=opening?holeOuter:contactOuter,actualInner=opening?holeInner:contactInner,outerUV=actualOuter.map(q=>flip(q.uv)),innerOnOuter=actualInner.map(q=>flip(conicalDevelopmentPoint(conicalSurfacePoint(q.point[0],q.phi,p),p)));
+  const references=[{points:[flip([rho0,0]),flip([rho1,0])],type:'seam',label:'A → B 起縫基準'},{points:innerOnOuter,type:'inner-edge',label:opening?'內壁孔口投影參考（非切線）':'支管內緣貼合參考（禁止開孔）'}];if(!opening)references.push({points:outerUV,type:'datum',label:'支管外緣貼合定位（禁止開孔）',closed:true});
+  const mapping={coordinateSystem:'conical-outer-isometric-development',hostType:'cone',motherOpening:opening,seamAngle:seam,sectorAngle,slantRadii:[rho0,rho1],k:m.k,s:m.s,normalOffset:0,...(mirrorX?{developmentMirrorX:true}:{})};
   const mother=translatedTemplate('main','大小頭外壁 1:1 包覆定位紙樣','已成形母材外表面等距展開',developedBoundary,opening?[outerUV]:[],references,
     ['扇環為理想大小頭外壁的等距包覆紙樣，不是鋼板中性層落料圖。','起縫設在支管對側；A、B 端位置沿錐面母線量測。',...(opening?['實線孔口是外壁開孔；內壁孔口只作參考。']:['母材保持封閉：只描貼合定位輪廓，禁止依輪廓開孔。'])],mapping);
   // Include smooth boundary sagitta in the numeric print precision gate.

@@ -57,7 +57,8 @@ test('donor limits, zero-angle routes, factory mismatch and weld space prevent i
   for(const p of [{aDonor:22.5},{bAxis:'x+'},{rise:0,roll:0},{aKind:'factory',aFactoryAngle:90},{minStraight:2000},{aPortGap:null},{bGap:-1},{run:null},{aAxis:'custom',aAxisX:0,aAxisY:0,aAxisZ:0},{datum:'marks',aShiftX:null},{aRadiusMethod:'outerArc',aMeasuredArc:1}]){
     const r=computeOffset({basis:'ports',layout:'rolling',run:800,rise:500,...p});assert.equal(r.valid,false,JSON.stringify(p));assert.throws(()=>buildOffsetWorkOrder(r));
   }
-  const f=fixture(),r=valid({...f.params,aKind:'factory',aFactoryAngle:f.a,aTakeout:f.ra*Math.tan(rad(f.a)/2)});near(r.cutLength,f.straight,2e-6);assert.equal(r.elbows.a.stations.length,0);
+  // A factory Ta is centre-to-mating-face; a kept-end straight typed for it must not be added again.
+  const f=fixture({tangents:[0,8]}),r=valid({...f.params,aKind:'factory',aFactoryAngle:f.a,aTakeout:f.ra*Math.tan(rad(f.a)/2),aTangent:12});near(r.cutLength,f.straight,2e-6);assert.equal(r.elbows.a.stations.length,0);assert.equal(r.elbows.a.tangent,0);
 });
 
 test('rough blank and minimum weld-to-weld straight length are separate from the four root gaps',()=>{

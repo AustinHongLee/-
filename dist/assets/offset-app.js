@@ -12,6 +12,7 @@ import {offsetRecoveryItems,offsetFieldRoute,nextOffsetAction} from './offset-re
 import {portScene,sceneDragDelta,SCENE_VIEWS,directionIcon,stockElbowSVG,elbowIcon,weldSketchSVG} from './offset-input-visuals.js';
 import {COMPONENT_NAMES,CONNECTION_NAMES,validateComponents,componentTargetLabel,installRouteComponents} from './offset-components.js';
 import {partName,componentIcon,componentFabricationSVG} from './offset-component-ui.js';
+import {mountWorkbenchStatus} from './workbench-status.js';
 
 const $=id=>document.getElementById(id),storageKey='special-method-offset-v1';
 const supplyKeys=['Kind','Donor','Radius','RadiusMethod','MeasuredArc','FactoryAngle','Takeout','Tangent'];
@@ -20,7 +21,7 @@ let editor='position',selectedPort=null,sceneView='iso',sceneFrame=null,dragStat
 let issues=[],activeIssueId=null,attemptedCalculation=false,searchPending=false;
 let viewer=null,viewerPromise=null,view='offset',printHTML='',printTitle='',toastTimer;
 let solutionViewer=null,solutionViewerPromise=null,solutionView='3d',solutionViewerPlan=null,solutionViewerFailed=false;
-let componentDraft=null,componentIssues=[];
+let componentDraft=null,componentIssues=[],legacyNotices=[];
 function toast(message){$('offset-toast').textContent=message;$('offset-toast').hidden=false;clearTimeout(toastTimer);toastTimer=setTimeout(()=>$('offset-toast').hidden=true,4500);}
 const number=value=>value.trim()===''?null:Number(value);
 const nps=()=>ASME_PIPE_SIZES.find(p=>p.odMm===params.od)?.nps??'custom';
@@ -31,7 +32,7 @@ function elbowFields(end){
   const open=$('elbow-'+end+'-fields').querySelector('.supply-details')?.open??false;
   const kind=params[end+'Kind'],method=params[end+'RadiusMethod'],ports=params.basis==='ports',radius=nominalElbowRadius(nps(),'lr');
   const main=kind==='factory'?field(end+'FactoryAngle','現成角度 °',params[end+'FactoryAngle'])+field(end+'Takeout','中心至接合端面 mm',params[end+'Takeout']):field(end+'Donor','原彎頭角度 °',params[end+'Donor'])+(ports&&method!=='radius'?field(end+'MeasuredArc',method==='outerArc'?'完整外背弧 mm':'完整內腹弧 mm',params[end+'MeasuredArc']):field(end+'Radius','中心線半徑 Rc mm',params[end+'Radius']));
-  $('elbow-'+end+'-fields').innerHTML=`<p class="supply-mode-help">原件可切成所需角度；整支使用保持原角度。</p><div class="supply-choice-grid">${[['cut','90° 原件',90],['cut','45° 原件',45],['factory','整支 '+fmt(params[end+'FactoryAngle'])+'°',params[end+'FactoryAngle']]].map(([k,label,angle])=>`<button type="button" class="visual-choice" data-supply-kind="${k}"${k==='cut'?` data-donor="${angle}"`:''} data-supply-end="${end}" aria-pressed="${kind===k&&(k==='factory'||params[end+'Donor']===angle)}">${elbowIcon(angle)}<span>${label}</span></button>`).join('')}</div><div id="stock-sketch-${end}" class="stock-sketch">${stockElbowSVG(params,end)}</div>${kind==='cut'&&radius?`<button type="button" class="stock-preset" data-radius-end="${end}">帶入 ${esc(nps())} 吋 90° LR：Rc ${fmt(radius)}</button>`:''}<details class="workflow-advanced supply-details"${open?' open':''}><summary>輸入精確尺寸／供料細節</summary><div class="fields-grid">${main}</div><div class="field"><label for="offset-${end}Kind">彎頭取得方式</label><select id="offset-${end}Kind" name="${end}Kind"><option value="cut"${kind==='cut'?' selected':''}>原件切成需要角度</option><option value="factory"${kind==='factory'?' selected':''}>現成固定角度</option></select></div>${kind==='cut'&&ports?`<div class="field"><label for="offset-${end}RadiusMethod">半徑怎麼取得？</label><select id="offset-${end}RadiusMethod" name="${end}RadiusMethod">${[['radius','直接填 Rc／型錄尺寸'],['outerArc','捲尺量完整外背弧'],['innerArc','捲尺量完整內腹弧']].map(([v,t])=>`<option value="${v}"${method===v?' selected':''}>${t}</option>`).join('')}</select></div><p class="offset-help">完整弧長排除兩端直段；Rc 不是外背半徑。</p>`:''}${ports?field(end+'Tangent','保留端自帶直段 mm',params[end+'Tangent'],'從端面量到圓弧起點；明確無直段填 0。'):''}</details>`;
+  $('elbow-'+end+'-fields').innerHTML=`<p class="supply-mode-help">原件可切成所需角度；整支使用保持原角度。</p><div class="supply-choice-grid">${[['cut','90° 原件',90],['cut','45° 原件',45],['factory','整支 '+fmt(params[end+'FactoryAngle'])+'°',params[end+'FactoryAngle']]].map(([k,label,angle])=>`<button type="button" class="visual-choice" data-supply-kind="${k}"${k==='cut'?` data-donor="${angle}"`:''} data-supply-end="${end}" aria-pressed="${kind===k&&(k==='factory'||params[end+'Donor']===angle)}">${elbowIcon(angle)}<span>${label}</span></button>`).join('')}</div><div id="stock-sketch-${end}" class="stock-sketch">${stockElbowSVG(params,end)}</div>${kind==='cut'&&radius?`<button type="button" class="stock-preset" data-radius-end="${end}">帶入 ${esc(nps())} 吋 90° LR：Rc ${fmt(radius)}</button>`:''}<details class="workflow-advanced supply-details"${open?' open':''}><summary>輸入精確尺寸／供料細節</summary><div class="fields-grid">${main}</div><div class="field"><label for="offset-${end}Kind">彎頭取得方式</label><select id="offset-${end}Kind" name="${end}Kind"><option value="cut"${kind==='cut'?' selected':''}>原件切成需要角度</option><option value="factory"${kind==='factory'?' selected':''}>現成固定角度</option></select></div>${kind==='cut'&&ports?`<div class="field"><label for="offset-${end}RadiusMethod">半徑怎麼取得？</label><select id="offset-${end}RadiusMethod" name="${end}RadiusMethod">${[['radius','直接填 Rc／型錄尺寸'],['outerArc','捲尺量完整外背弧'],['innerArc','捲尺量完整內腹弧']].map(([v,t])=>`<option value="${v}"${method===v?' selected':''}>${t}</option>`).join('')}</select></div><p class="offset-help">完整弧長排除兩端直段；Rc 不是外背半徑。</p>`:''}${ports&&kind!=='factory'?field(end+'Tangent','保留端自帶直段 mm',params[end+'Tangent'],'從端面量到圓弧起點；明確無直段填 0。'):''}</details>`;
 }
 function portFields(){
   $('port-orientation-fields').innerHTML=['a','b'].map(end=>`<div class="port-direction"><div class="field"><label for="offset-${end}Axis">${end.toUpperCase()} 口朝向</label><select id="offset-${end}Axis" name="${end}Axis">${[...Object.keys(AXIS_OPTIONS).map(k=>[k,k[1]+k[0].toUpperCase()]),['custom','自訂斜向']].map(([v,t])=>`<option value="${v}"${params[end+'Axis']===v?' selected':''}>${t}</option>`).join('')}</select></div><div class="fields-grid offset-vector" id="${end}-axis-vector"${params[end+'Axis']==='custom'?'':' hidden'}>${['X','Y','Z'].map(k=>field(end+'Axis'+k,k+' 分量',params[end+'Axis'+k])).join('')}</div></div>`).join('')+'<p class="field-note">朝向＝從既有管內，穿過管口朝新接管。常見相向：A +X、B −X。</p>';
@@ -164,7 +165,7 @@ function renderRouteContext(){
 function renderSolution(){
   const plan=workRoute();$('measurement-summary').textContent=params.basis==='ports'?`X ${fmt(params.run)} · Y ${fmt(params.layout==='rolling'?params.roll:0)} · Z ${fmt(params.rise)} mm`:'理論交點量測模式';
   $('solution-title').textContent=activePlan?routePlanTitle(activePlan):'原兩彎頭接法';$('offset-status').textContent=activePlan?'建議 '+activePlan.id:'原方案';
-  $('solution-note').textContent=(activePlan?(baseline?`比原接法多 ${activePlan.jointCount-baseline.jointCount} 個焊口。`:`${activePlan.elbows.length} 個彎頭、${activePlan.pipes.length} 段直管，端口位置與朝向已通過幾何閉合核對。`):'旋轉核對接管方向；點圖上的零件，看加工方式。')+(plan?.components?.length?` 含 ${plan.components.length} 組指定零件、${plan.boltCount} 處螺栓接合；零件外形為辨識示意。`:'');
+  $('solution-note').textContent=(activePlan?(baseline?(d=>d>0?`比原接法多 ${d} 個焊口。`:d<0?`比原接法少 ${-d} 個焊口。`:'焊口數與原接法相同。')(activePlan.jointCount-baseline.jointCount):`${activePlan.elbows.length} 個彎頭、${activePlan.pipes.length} 段直管，端口位置與朝向已通過幾何閉合核對。`):'旋轉核對接管方向；點圖上的零件，看加工方式。')+(plan?.components?.length?` 含 ${plan.components.length} 組指定零件、${plan.boltCount} 處螺栓接合；零件外形為辨識示意。`:'');
   document.querySelector('.solution-card').hidden=!plan;$('choose-title').textContent=plan?'先看焊口少的接法':'找其他可行的接法';
   $('solution-diagram').innerHTML=plan?(plan.legacy?offsetDiagramSVG(result):assemblySVG(plan,{interactive:true})):'<p class="workflow-empty">目前無法完成兩彎頭接法，可展開下方找其他接法。</p>';
   $('solution-diagram').classList.toggle('legacy-diagram',Boolean(plan?.legacy));
@@ -184,6 +185,7 @@ function renderCut(){
   for(const id of ['offset-cut-values','offset-fabrication-diagram','offset-cut-steps','offset-station-rows'])$(id).innerHTML='';
   $('station-details').hidden=true;$('offset-cut-note').textContent='';$('cut-piece-title').textContent=e?`${e.id} · ${partName(e)}${e.type==='pipe'?'加工':e.type==='elbow'?' '+fmt(e.angle,4)+'°':'組立'}`:'';
   if(!e)return;
+  if(e.stations?.length&&(!(selected>=0)||selected>e.stations.length-1))selected=0;
   if(e.type==='component'){
     $('offset-cut-values').innerHTML=`<p class="cut-instruction">依實物組立總長 <strong>${fmt(e.length)} mm</strong> 備料，不切除閥體或法蘭。</p>`;
     $('offset-fabrication-diagram').innerHTML=componentFabricationSVG(e);
@@ -201,7 +203,7 @@ function renderCut(){
     $('offset-cut-steps').innerHTML=`<ol class="offset-shop-steps"><li>核對實物 ${fmt(e.angle)}°、Rc ${fmt(e.radius)} mm${plan.legacy?'':`，前直段 ${fmt(e.tangentBefore)}／後直段 ${fmt(e.tangentAfter)} mm`}。</li><li>按組立圖定位轉向，再和相鄰管段試組。</li></ol>`;return;
   }
   $('station-details').hidden=false;
-  $('offset-cut-values').innerHTML=`<p class="cut-instruction">原 ${fmt(e.donor)}°，保留 <strong>${fmt(e.angle,4)}°</strong>。</p>`+metrics([['外背從端面量',fmt(e.outerArc+(e.tangent??0))+' mm'],['內腹從端面量',fmt(e.innerArc+(e.tangent??0))+' mm'],['左右側從端面量',fmt(e.centerArc+(e.tangent??0))+' mm']]);
+  $('offset-cut-values').innerHTML=`<p class="cut-instruction">原 ${fmt(e.donor)}°，保留 <strong>${fmt(e.angle,4)}°</strong>。${e.trimFar?`<br><small>角度剛好用滿原件，但另一端自帶直段 ${fmt(e.trimFar)} mm 必須在弧端切除。</small>`:''}</p>`+metrics([['外背從端面量',fmt(e.outerArc+(e.tangent??0))+' mm'],['內腹從端面量',fmt(e.innerArc+(e.tangent??0))+' mm'],['左右側從端面量',fmt(e.centerArc+(e.tangent??0))+' mm']]);
   const cutSVG=elbowFabricationSVG(e,params.od);
   $('offset-fabrication-diagram').innerHTML='<div class="fabrication-panels">'+cutSVG.replace('viewBox="0 0 740 325"','viewBox="0 0 430 325"')+cutClockSVG(e,params.od,selected)+'</div>';
   $('offset-cut-steps').innerHTML=elbowCutSteps(e,params.od).replace('保留原端口接既有管口；切短的那端接中間直管。',activePlan?`保留${e.retain==='outlet'?'後端（靠 B）':'前端（靠 A）'}，依材料順序接合。`:'保留原端口接既有管口；切短的那端接中間直管。');
@@ -215,6 +217,27 @@ function updatePaper(){
   if(!hasCut){$('offset-paper-count').textContent='整支彎頭可印尺寸加工單。';return;}
   try{const plan=offsetStripPlan(result,$('offset-paper').value);$('offset-paper-count').textContent=`切角量尺 ${plan.pages} 頁 · 列印 100%，核對 100 mm 校正尺。`;}catch(e){$('print-offset-strips').disabled=true;$('offset-paper-count').textContent=e.message;}
 }
+// Lazily mounted: render paths may run before this line during module start-up.
+var statusStripInstance;// var + function declaration: both are usable before this line runs.
+function statusStripUpdate(model){(statusStripInstance??=mountWorkbenchStatus(document.querySelector('.workbench-nav'))).update(model);}
+// Glanceable state: one tone, the numbers a fitter acts on, and every open problem one click away.
+function renderStatus(){
+  const plan=workRoute(),valid=Boolean(plan?.valid),measured=params.basis==='ports'?`X ${fmt(params.run)} · Y ${fmt(params.layout==='planar'?0:params.roll)} · Z ${fmt(params.rise)}`:`偏移 ${fmt(params.rise)}${params.layout==='rolling'?' · 側移 '+fmt(params.roll):''}`,list=[];
+  // Once a valid alternative route is chosen, the original route's problems are history, not blockers.
+  for(const item of issues)list.push({level:valid&&activePlan?'info':item.inputError?'error':'warn',text:item.title+(item.detail?'：'+item.detail:''),actionLabel:item.actionLabel??'帶我修正',action:()=>{if(stage!==1)goTo(1);showErrors=true;renderErrors();jumpToRecovery(item);}});
+  for(const notice of legacyNotices)list.push({level:'warn',text:notice,actionLabel:'已核對',action:()=>{legacyNotices=legacyNotices.filter(n=>n!==notice);renderStatus();}});
+  for(const message of componentIssues)list.push({level:'warn',text:message,actionLabel:'看零件',action:()=>{if(stage!==2&&workRoute()?.valid!==undefined)goTo(2);$('component-panel')?.scrollIntoView({behavior:'smooth',block:'center'});}});
+  const pipes=plan?.pipes??[],elbows=plan?.elbows??[];
+  const metrics=valid?[{label:pipes.length>1?'直管總長':'直管成品',value:fmt(pipes.reduce((s,e)=>s+e.length,0)),unit:'mm'},{label:'彎頭',value:elbows.map(e=>fmt(e.angle,1)+'°').join(' / ')||'—',quiet:elbows.length>2},{label:'焊口',value:String(plan.jointCount??'—'),unit:'個'},{label:'量測',value:measured,quiet:true}]:[{label:'量測',value:measured,quiet:true}];
+  const inputErrors=list.some(i=>i.level==='error'),routeMissing=!valid&&params.basis==='ports'&&Boolean(result.context);
+  const title=valid?(stage===3?'可出加工單':activePlan?`已選 ${activePlan.id} 接法`:'原兩彎頭接法成立'):inputErrors?'尺寸待修正':routeMissing?'原接法不成立 · 選其他接法':'接法不成立';
+  if(routeMissing&&!list.length)list.push({level:'warn',text:'端口資料完整，但原兩彎頭接不成；請比較其他接法或調整供料。',actionLabel:'找接法',action:()=>exploreOtherRoutes()});
+  statusStripUpdate({tone:valid?(list.some(i=>i.level!=='info')?'warn':'ok'):inputErrors?'error':'warn',title,detail:valid?`${plan.elbows.length} 彎頭 · ${plan.pipes.length} 段直管${plan.components?.length?' · '+plan.components.length+' 組零件':''}`:'修正後才會出加工單',metrics,issues:list});
+  // Stepper: each step carries its own result so progress reads without opening it.
+  const summaries={1:result.context||result.valid?measured:'待量測',2:valid?(activePlan?`${activePlan.id} · ${plan.jointCount} 焊口`:`原接法 · ${plan.jointCount} 焊口`):routeMissing?'需選其他接法':'—',3:valid?`${plan.elements.length} 件加工`:'—'};
+  document.querySelectorAll('[data-step]').forEach(b=>{const n=Number(b.dataset.step);let small=b.querySelector('.step-summary');if(!small){small=document.createElement('small');small.className='step-summary';b.append(small);}small.textContent=summaries[n];
+    b.dataset.state=n===1?(inputErrors?'error':result.context||result.valid?'done':'todo'):n===2?(valid?'done':routeMissing?'warn':'todo'):(valid&&stage===3?'current':valid?'ready':'todo');});
+}
 function updateStages(){
   const measurable=result.valid||Boolean(result.context),valid=Boolean(workRoute()?.valid);
   document.querySelectorAll('[data-stage]').forEach(el=>el.hidden=Number(el.dataset.stage)!==stage);
@@ -225,6 +248,7 @@ function updateStages(){
   if(stage===1){$('measure-title').textContent={position:params.basis==='ports'?'先量兩個端口的距離':'量中心線交點的偏移',stock:'再確認手邊彎頭與管徑',gaps:'最後填焊口間隙與留料'}[editor];document.querySelector('[data-stage="1"] .workflow-stage-head>p').textContent={position:params.basis==='ports'?'填現場實測值，點圖可粗調與選朝向。':'填理論交點尺寸或已知角度，依選定基準計算。',stock:'確認原件角度與實際尺寸，兩端相同只填一次。',gaps:'間隙從管長扣除，修磨留料另加。'}[editor];}
   viewer?.setActive(stage===3&&$('workflow-model').open&&valid);
   syncSolutionViewer();
+  renderStatus();
 }
 function stopSolutionSpin(){solutionViewer?.setAutoRotate(false);const button=document.querySelector('[data-solution-motion="spin"]');button.setAttribute('aria-pressed','false');button.textContent='自動旋轉';}
 function syncSolutionViewer(){
@@ -324,7 +348,7 @@ function renderInputVisuals(){
   $('orientation-presets').hidden=!ports;$('endpoint-choices').hidden=!ports;$('direction-picker').hidden=!ports||selectedPort===null;
   $('orientation-presets').innerHTML=presets.map(([key,label,a,b])=>`<button type="button" class="visual-choice" data-orientation="${key}" aria-pressed="${params.aAxis===a&&params.bAxis===b}"><span class="orientation-icons">${directionIcon(a)}${directionIcon(b)}</span><span>${label}</span></button>`).join('');
   $('endpoint-choices').innerHTML=['a','b'].map(end=>`<button type="button" data-endpoint="${end}" aria-pressed="${selectedPort===end}">${end.toUpperCase()} 口 <span>${axisLabel(params[end+'Axis'])}</span> ✎</button>`).join('');
-  if(selectedPort){$('direction-picker-title').textContent=selectedPort.toUpperCase()+' 口朝哪裡？';$('direction-options').innerHTML=[['x+','前'],['x-','後'],['y+','右'],['y-','左'],['z+','上'],['z-','下']].map(([value,label])=>`<button type="button" class="visual-choice" data-axis-choice="${value}" aria-pressed="${params[selectedPort+'Axis']===value}">${directionIcon(value)}<span>${label} ${axisLabel(value)}</span></button>`).join('')+'<button type="button" class="custom-axis" data-axis-choice="custom">斜向／填精確方向分量</button>';}
+  if(selectedPort){$('direction-picker-title').textContent=selectedPort.toUpperCase()+' 口朝哪裡？';$('direction-options').innerHTML=[['x+','前'],['x-','後'],['y+','左'],['y-','右'],['z+','上'],['z-','下']].map(([value,label])=>`<button type="button" class="visual-choice" data-axis-choice="${value}" aria-pressed="${params[selectedPort+'Axis']===value}">${directionIcon(value)}<span>${label} ${axisLabel(value)}</span></button>`).join('')+'<button type="button" class="custom-axis" data-axis-choice="custom">斜向／填精確方向分量</button>';}
   for(const end of ['a','b']){const sketch=$('stock-sketch-'+end);if(sketch)sketch.innerHTML=stockElbowSVG(params,end);document.querySelectorAll(`[data-supply-kind][data-supply-end="${end}"]`).forEach(b=>b.setAttribute('aria-pressed',String(params[end+'Kind']===b.dataset.supplyKind&&(!b.dataset.donor||Number(b.dataset.donor)===params[end+'Donor']))));}
   $('weld-sketch').innerHTML=weldSketchSVG(params);
 }
@@ -340,7 +364,7 @@ function activateVisual(target){
 function renderPieceRail(){const plan=workRoute();$('piece-rail').innerHTML=(plan?.elements??[]).map(e=>`<button type="button" data-piece="${esc(e.id)}" aria-pressed="${piece===e.id}" aria-label="加工 ${esc(e.id)} ${esc(partName(e))}">${e.type==='component'?componentIcon(e.kind):e.type==='pipe'?'<svg viewBox="0 0 76 62" aria-hidden="true"><path d="M13 38h50" stroke="currentColor" stroke-width="15"/></svg>':elbowIcon(e.angle)}<span>${esc(e.id)}</span><small>${e.type==='elbow'?fmt(e.angle,2)+'°':esc(partName(e))}</small></button>`).join('');}
 function choosePiece(value,open=false){piece=value;selected=0;if(open)goTo(3);else{renderPieceRail();$('cut-end').value=piece;renderCut();}setView(activePlan||baseline?.components?.length?piece:['A','B'].includes(piece)?piece.toLowerCase():'offset');}
 $('offset-nps').innerHTML=ASME_PIPE_SIZES.map(p=>`<option value="${esc(p.nps)}">${esc(p.nps)} 吋</option>`).join('')+'<option value="custom">實測外徑</option>';
-let restored=false;try{const saved=localStorage.getItem(storageKey);if(saved){const data=readOffsetProject(saved);params=data.params;id=data.id;restored=true;}}catch{}
+let restored=false;try{const saved=localStorage.getItem(storageKey);if(saved){const data=readOffsetProject(saved);params=data.params;id=data.id;legacyNotices=data.notices??[];restored=true;}}catch{}
 const phoneLayout=matchMedia('(max-width:720px)');
 $('job-material-details').open=!phoneLayout.matches;
 phoneLayout.addEventListener('change',event=>$('job-material-details').open=!event.matches);
@@ -400,7 +424,7 @@ $('fit-use-plan').addEventListener('click',()=>useFit());$('fit-round').addEvent
 $('offset-paper').addEventListener('change',updatePaper);$('offset-id').addEventListener('input',()=>{id=$('offset-id').value;saveDraft();});
 $('save-offset').addEventListener('click',()=>{try{download(offsetProjectJSON(params,id),'application/json',fileID()+'.offset.json');}catch(e){toast(e.message);}});
 $('load-offset').addEventListener('click',()=>$('offset-file').click());
-$('offset-file').addEventListener('change',async()=>{const file=$('offset-file').files[0];if(!file)return;try{if(file.size>100000)throw new Error('專案檔案過大。');const data=readOffsetProject(await file.text());params=data.params;id=data.id;piece='P1';selected=0;stage=1;editor='position';attemptedCalculation=false;showErrors=false;setEditor('position');syncInputs();render();toast('已載入，先核對現場尺寸。');}catch(e){toast('載入失敗：'+e.message);}$('offset-file').value='';});
+$('offset-file').addEventListener('change',async()=>{const file=$('offset-file').files[0];if(!file)return;try{if(file.size>100000)throw new Error('專案檔案過大。');const data=readOffsetProject(await file.text());params=data.params;id=data.id;legacyNotices=data.notices??[];piece='P1';selected=0;stage=1;editor='position';attemptedCalculation=false;showErrors=false;setEditor('position');syncInputs();render();toast('已載入，先核對現場尺寸。');}catch(e){toast('載入失敗：'+e.message);}$('offset-file').value='';});
 $('offset-csv').addEventListener('click',()=>{try{download(activePlan||baseline?.components?.length?routePlanCSV(workRoute()):offsetCSV(result),'text/csv;charset=utf-8',fileID()+(activePlan?'.'+activePlan.id:'')+'.csv');}catch(e){toast(e.message);}});
 $('print-offset-strips').addEventListener('click',()=>preview('strips'));
 $('close-offset-preview').addEventListener('click',()=>$('offset-preview').close());

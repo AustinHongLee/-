@@ -60,9 +60,10 @@ test('rotated real material faces cut an analytic cylinder and share one physica
       close(template.width,face.length);
       for(const row of rows){
         const [u,v]=row.sectionPoint,x=300-u*Math.cos(rotation)+v*Math.sin(rotation),y=u*Math.sin(rotation)+v*Math.cos(rotation);
-        const z=Math.sqrt((R+gap)**2-y*y),contactZ=Math.sqrt(R*R-y*y);
+        // Mother mark = foot of the true surface normal under the finished cut point (gap is a normal offset).
+        const z=Math.sqrt((R+gap)**2-y*y),scale=R/(R+gap);
         close(row.point[0],x);close(row.point[1],y);close(row.point[2],z);
-        close(row.contactPoint[2],contactZ);close(row.depth,end-z);
+        close(row.contactPoint[0],x);close(row.contactPoint[1],y*scale);close(row.contactPoint[2],z*scale);close(row.depth,end-z);
       }
       close(rows.at(-1).faceDistance,face.length);
       if(face.kind==='arc'){
