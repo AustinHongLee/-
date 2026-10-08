@@ -1,0 +1,3 @@
+# cmd.exe needs CRLF to find labels reliably; the launcher text files are shown with `type`.
+*.cmd text eol=crlf
+scripts/launcher/*.txt text eol=crlf

@@ -1,0 +1,6 @@
+找不到可以執行的 Node.js 20 以上版本。
+（上方若有「cannot start」，表示找到 node.exe 但無法執行，常見原因是防毒軟體或權限阻擋。）
+工作台需要 Node.js 才能在這台電腦執行，請安裝 LTS 版：
+  到 https://nodejs.org/ 下載 Windows 安裝程式，
+  或在命令提示字元執行 winget install OpenJS.NodeJS.LTS
+安裝後再雙擊「啟動工作台.cmd」。
