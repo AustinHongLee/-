@@ -66,7 +66,7 @@ export function weldSectionSVG(ctx){
       const R=pellet/2*s,yC=yIn-R,lead=raised?toeL-R*.35:xc+W*.1,rest=[lead-R*2.7,lead-R*5.6].filter(x=>x-R>x0+2);
       overlay+=[lead,...rest].map(x=>`<circle cx="${fmt(x)}" cy="${fmt(yC)}" r="${fmt(R)}" fill="#fff" stroke="${C.text}" stroke-width="1.2"/>`).join('')
         +rest.map(x=>`<path d="M${fmt(x+R+3)} ${fmt(yC)}h${fmt(R*.8)}" stroke="${C.muted}" stroke-width="1.2" marker-end="url(#arrow-${id})"/>`).join('');
-      if(raised){const hitX=lead+R*.86,hitY=yIn-R*.5;overlay+=[0,1,2,3,4,5,6,7].map(i=>{const a=i*Math.PI/4;return `<path d="M${fmt(hitX)} ${fmt(hitY)}l${fmt(Math.cos(a)*5)} ${fmt(Math.sin(a)*5)}" stroke="${C.warn}" stroke-width="1.6"/>`;}).join('')+leader(noteX,noteY+3,hitX,hitY-6,C.warn)+label(noteX+3,noteY,['撞上焊道：粉屑、拉絲'],C.warn);}
+      if(raised){const hitX=lead+R*.86,hitY=yIn-R*.5;overlay+=[0,1,2,3,4,5,6,7].map(i=>{const a=i*Math.PI/4;return `<path d="M${fmt(hitX)} ${fmt(hitY)}l${fmt(Math.cos(a)*5)} ${fmt(Math.sin(a)*5)}" stroke="${C.warn}" stroke-width="1.6"/>`;}).join('')+leader(noteX,noteY+3,hitX,hitY-6,C.warn)+label(noteX+3,noteY,['撞上焊道：碎成粉屑'],C.warn);}
       else overlay+=label(noteX+3,noteY,['平滑滑過，碰不到焊道']);
     }
     const tick=raised?`<path d="M${fmt(toeR+5)} ${fmt(yIn)}V${fmt(yTop)}M${fmt(toeR+2)} ${fmt(yTop)}h6M${fmt(toeR+2)} ${fmt(yIn)}h6" stroke="${C.text}" stroke-width=".8"/>`:'';
