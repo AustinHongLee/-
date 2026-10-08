@@ -13,6 +13,8 @@ import {portScene,sceneDragDelta,SCENE_VIEWS,directionIcon,stockElbowSVG,elbowIc
 import {COMPONENT_NAMES,CONNECTION_NAMES,validateComponents,componentTargetLabel,installRouteComponents} from './offset-components.js';
 import {partName,componentIcon,componentFabricationSVG} from './offset-component-ui.js';
 import {mountWorkbenchStatus} from './workbench-status.js';
+import {initFlowPanel,setFlowOd,flowCardLine,getMedium,setMedium,flowContext,setOwnerSheetState} from './offset-flow-ui.js';
+import {buildOwnerSheet} from './offset-flow-report.js';
 
 const $=id=>document.getElementById(id),storageKey='special-method-offset-v1';
 const supplyKeys=['Kind','Donor','Radius','RadiusMethod','MeasuredArc','FactoryAngle','Takeout','Tangent'];
@@ -102,7 +104,7 @@ async function applyComponents(next){
   if(!workRoute()?.valid&&result.context){$('offset-plans').open=true;await comparePlans();}
 }
 const projectReady=()=>result.valid||params.basis==='ports'&&Boolean(result.context);
-function saveDraft(){if(projectReady())try{localStorage.setItem(storageKey,offsetProjectJSON(params,id));}catch{}}
+function saveDraft(){if(projectReady())try{localStorage.setItem(storageKey,offsetProjectJSON(params,id,getMedium()));}catch{}}
 function metrics(items){return `<dl class="workflow-metrics">${items.map(([label,value])=>`<div><dt>${label}</dt><dd>${esc(value)}</dd></div>`).join('')}</dl>`;}
 function renderErrors(){
   issues=offsetRecoveryItems(result,{sharedStock});
@@ -284,9 +286,9 @@ function goTo(next){
   focusStage();
 }
 
-function invalidatePlans(){const had=routePlans!==null;routePlans=null;activePlan=null;planGeneration++;$('offset-plan-cards').replaceChildren();$('offset-plan-limits').hidden=true;$('compare-offset-plans').disabled=!result.context;$('offset-plan-status').textContent=had?'條件已變更，重新找接法後再比較。':'';}
+function invalidatePlans(){const had=routePlans!==null;routePlans=null;activePlan=null;planGeneration++;setOwnerSheetState(false,'先按「找接法建議」，再點選一個備選接法。');$('offset-plan-cards').replaceChildren();$('offset-plan-limits').hidden=true;$('compare-offset-plans').disabled=!result.context;$('offset-plan-status').textContent=had?'條件已變更，重新找接法後再比較。':'';}
 function render(keepChoice=false){
-  const key=keepChoice?activePlan?.key:null;result=computeOffset(params);baseline=originalView();
+  const key=keepChoice?activePlan?.key:null;result=computeOffset(params);baseline=originalView();setFlowOd(params.od);
   if(keepChoice&&routePlans){routePlans=compareRoutePlans(params);activePlan=key?routePlans.plans.find(p=>p.key===key)??null:null;renderPlans();}else invalidatePlans();
   syncVisibility();renderInputVisuals();
   $('save-offset').disabled=!projectReady();$('offset-csv').disabled=!workRoute()?.valid;renderSolution();renderWork();saveDraft();
@@ -296,9 +298,10 @@ function renderPlans(){
   const alternatives=routePlans.plans.filter(p=>!p.original);
   $('offset-plan-status').textContent=alternatives.length?`${alternatives.length} 個備選；點選後看圖與尺寸，再決定是否使用。`:'目前的焊口、供料與管段限制下，沒有找到其他接法。';
   const choices=[...(baseline?[{...baseline,id:'original'}]:[]),...alternatives];
-  $('offset-plan-cards').innerHTML=choices.map(p=>`<button type="button" class="plan-option" data-plan="${esc(p.id)}" aria-pressed="${p.original?!activePlan:activePlan?.id===p.id}"><span class="plan-thumb" aria-hidden="true">${assemblySVG(p)}</span><span class="plan-option-label">${p.original?'原兩彎頭接法':esc(routePlanTitle(p))}<small>${p.elbows.length} 個彎頭 · ${p.pipes.length} 段直管 · ${p.specialCuts??0} 次特殊切角 · ${p.halfCuts??0} 次對半切</small><small>總直管 ${fmt(p.totalPipe)} mm · ${p.envelope.maxExcursion>1e-5?'中心線繞出 '+fmt(p.envelope.maxExcursion)+' mm':'中心線在端口 XYZ 範圍內'}</small></span><span class="plan-welds">${p.jointCount} 焊口${!p.original&&baseline?.valid?`<small>${p.jointCount>=baseline.jointCount?'多':'少'} ${Math.abs(p.jointCount-baseline.jointCount)} 個</small>`:''}</span></button>`).join('');
+  $('offset-plan-cards').innerHTML=choices.map(p=>`<button type="button" class="plan-option" data-plan="${esc(p.id)}" aria-pressed="${p.original?!activePlan:activePlan?.id===p.id}"><span class="plan-thumb" aria-hidden="true">${assemblySVG(p)}</span><span class="plan-option-label">${p.original?'原兩彎頭接法':esc(routePlanTitle(p))}<small>${p.elbows.length} 個彎頭 · ${p.pipes.length} 段直管 · ${p.specialCuts??0} 次特殊切角 · ${p.halfCuts??0} 次對半切</small><small>總直管 ${fmt(p.totalPipe)} mm · ${p.envelope.maxExcursion>1e-5?'中心線繞出 '+fmt(p.envelope.maxExcursion)+' mm':'中心線在端口 XYZ 範圍內'}</small>${(line=>line?`<small class="plan-flow">${esc(line)}</small>`:'')(flowCardLine(p,baseline))}</span><span class="plan-welds">${p.jointCount} 焊口${!p.original&&baseline?.valid?`<small>${p.jointCount>=baseline.jointCount?'多':'少'} ${Math.abs(p.jointCount-baseline.jointCount)} 個</small>`:''}</span></button>`).join('');
   if(!alternatives.length)$('offset-plan-status').innerHTML+='<div class="recovery-actions"><button type="button" data-compare-field="planMaxJoints">核對焊口與搜尋限制 →</button><button type="button" data-back-stock>核對手邊供料 →</button></div>';
   $('offset-plan-limits').hidden=false;$('offset-plan-limitation').textContent=routePlans.limitation;
+  setOwnerSheetState(Boolean(activePlan),alternatives.length?'點選下方一個備選接法，比較單會並列原接法與該接法。':'沒有其他接法可比較。');
   renderComponentPanel();renderRouteContext();updateStages();
 }
 async function comparePlans(){
@@ -315,6 +318,7 @@ function renderFit(){
 }
 function useFit(round=false){$('fit-a').value=round?Math.round(result.elbows.a.angle*2)/2:result.elbows.a.angle;$('fit-b').value=round?Math.round(result.elbows.b.angle*2)/2:result.elbows.b.angle;$('fit-length').value=result.cutLength;renderFit();}
 function preview(kind){
+  if(kind==='owner'){try{printTitle='業主比較單';printHTML=buildOwnerSheet({base:baseline?.valid&&!baseline.legacy?baseline:null,plan:activePlan,ctx:flowContext(),id});$('offset-preview-title').textContent=printTitle;$('offset-print-frame').srcdoc=printHTML;$('offset-preview').showModal();}catch(e){toast(e.message);}return;}
   try{if(!workRoute()?.valid)throw new Error('先選可容納所有指定零件的接法，再列印加工單。');const paper=$('offset-paper').value,fit=fitResult();printTitle=kind==='strips'?'彎頭切角量尺':activePlan?activePlan.id+' 建議加工單':'偏移配管加工單';printHTML=kind==='strips'?buildOffsetStripPaper(result,id,paper):activePlan||baseline?.components?.length?buildRoutePlanWorkOrder(workRoute(),id,paper):buildOffsetWorkOrder(result,id,paper,fit.valid?fit:null);$('offset-preview-title').textContent=printTitle;$('offset-print-frame').srcdoc=printHTML;$('offset-preview').showModal();}catch(e){toast(e.message);}
 }
 function setView(next,reset=true){
@@ -364,10 +368,11 @@ function activateVisual(target){
 function renderPieceRail(){const plan=workRoute();$('piece-rail').innerHTML=(plan?.elements??[]).map(e=>`<button type="button" data-piece="${esc(e.id)}" aria-pressed="${piece===e.id}" aria-label="加工 ${esc(e.id)} ${esc(partName(e))}">${e.type==='component'?componentIcon(e.kind):e.type==='pipe'?'<svg viewBox="0 0 76 62" aria-hidden="true"><path d="M13 38h50" stroke="currentColor" stroke-width="15"/></svg>':elbowIcon(e.angle)}<span>${esc(e.id)}</span><small>${e.type==='elbow'?fmt(e.angle,2)+'°':esc(partName(e))}</small></button>`).join('');}
 function choosePiece(value,open=false){piece=value;selected=0;if(open)goTo(3);else{renderPieceRail();$('cut-end').value=piece;renderCut();}setView(activePlan||baseline?.components?.length?piece:['A','B'].includes(piece)?piece.toLowerCase():'offset');}
 $('offset-nps').innerHTML=ASME_PIPE_SIZES.map(p=>`<option value="${esc(p.nps)}">${esc(p.nps)} 吋</option>`).join('')+'<option value="custom">實測外徑</option>';
-let restored=false;try{const saved=localStorage.getItem(storageKey);if(saved){const data=readOffsetProject(saved);params=data.params;id=data.id;legacyNotices=data.notices??[];restored=true;}}catch{}
+let restored=false;try{const saved=localStorage.getItem(storageKey);if(saved){const data=readOffsetProject(saved);params=data.params;id=data.id;legacyNotices=data.notices??[];setMedium(data.medium);restored=true;}}catch{}
 const phoneLayout=matchMedia('(max-width:720px)');
 $('job-material-details').open=!phoneLayout.matches;
 phoneLayout.addEventListener('change',event=>$('job-material-details').open=!event.matches);
+initFlowPanel($('offset-flow'),{onChange:()=>{if(routePlans?.valid)renderPlans();saveDraft();},onOwnerSheet:()=>preview('owner')});
 syncInputs();$('offset-references').innerHTML=referencesHTML();render();$('project-restored').textContent=restored?'已恢復上次尺寸。':'專案儲存在這台裝置。';
 $('offset-inputs').addEventListener('submit',e=>{e.preventDefault();nextWorkflow();});
 $('offset-inputs').addEventListener('input',e=>{
@@ -422,9 +427,9 @@ $('solution-viewer').addEventListener('keydown',event=>{
 for(const k of ['fit-a','fit-b','fit-length'])$(k).addEventListener('input',renderFit);
 $('fit-use-plan').addEventListener('click',()=>useFit());$('fit-round').addEventListener('click',()=>useFit(true));
 $('offset-paper').addEventListener('change',updatePaper);$('offset-id').addEventListener('input',()=>{id=$('offset-id').value;saveDraft();});
-$('save-offset').addEventListener('click',()=>{try{download(offsetProjectJSON(params,id),'application/json',fileID()+'.offset.json');}catch(e){toast(e.message);}});
+$('save-offset').addEventListener('click',()=>{try{download(offsetProjectJSON(params,id,getMedium()),'application/json',fileID()+'.offset.json');}catch(e){toast(e.message);}});
 $('load-offset').addEventListener('click',()=>$('offset-file').click());
-$('offset-file').addEventListener('change',async()=>{const file=$('offset-file').files[0];if(!file)return;try{if(file.size>100000)throw new Error('專案檔案過大。');const data=readOffsetProject(await file.text());params=data.params;id=data.id;legacyNotices=data.notices??[];piece='P1';selected=0;stage=1;editor='position';attemptedCalculation=false;showErrors=false;setEditor('position');syncInputs();render();toast('已載入，先核對現場尺寸。');}catch(e){toast('載入失敗：'+e.message);}$('offset-file').value='';});
+$('offset-file').addEventListener('change',async()=>{const file=$('offset-file').files[0];if(!file)return;try{if(file.size>100000)throw new Error('專案檔案過大。');const data=readOffsetProject(await file.text());params=data.params;id=data.id;legacyNotices=data.notices??[];setMedium(data.medium);piece='P1';selected=0;stage=1;editor='position';attemptedCalculation=false;showErrors=false;setEditor('position');syncInputs();render();toast('已載入，先核對現場尺寸。');}catch(e){toast('載入失敗：'+e.message);}$('offset-file').value='';});
 $('offset-csv').addEventListener('click',()=>{try{download(activePlan||baseline?.components?.length?routePlanCSV(workRoute()):offsetCSV(result),'text/csv;charset=utf-8',fileID()+(activePlan?'.'+activePlan.id:'')+'.csv');}catch(e){toast(e.message);}});
 $('print-offset-strips').addEventListener('click',()=>preview('strips'));
 $('close-offset-preview').addEventListener('click',()=>$('offset-preview').close());

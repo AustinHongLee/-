@@ -2,14 +2,17 @@ import {computeOffset,DEFAULT_OFFSET,OFFSET_REFERENCES,offsetSurfaceFrame} from 
 import {offsetDiagramSVG} from './offset-diagram.js';
 import {elbowFabricationSVG,elbowCutSteps} from './offset-fabrication.js';
 import {cross} from './offset-ports.js';
+import {normalizeMedium} from './offset-flow.js';
 export const esc = v => String(v).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 export const fmt = (v,n=2) => Number.isFinite(v)?Number(v.toFixed(n)).toString():'—';
 const exact = v => Number(v.toFixed(6));
 function checked(result){if(!result?.valid)throw new Error('尺寸無效，請先修正再匯出。');return result;}
 // A project stores measured inputs; manufacturing exports still require a closed, selected route.
 function projectInputs(result){if(!result.valid&&!(result.params.basis==='ports'&&result.context))throw new Error(result.errors.map(e=>e.message).join(' '));return result;}
-export function offsetProjectJSON(params,id='OFF-001') {
-  const r=projectInputs(computeOffset(params));return JSON.stringify({format:'special-method-offset',version:5,id:String(id).slice(0,40),params:r.params},null,2);
+// An optional medium (flow comparison for the owner) travels with the project; older readers ignore it.
+export function offsetProjectJSON(params,id='OFF-001',medium=null) {
+  const r=projectInputs(computeOffset(params)),m=medium?normalizeMedium(medium):null;
+  return JSON.stringify({format:'special-method-offset',version:5,id:String(id).slice(0,40),params:r.params,...(m&&m.kind!=='none'?{medium:m}:{})},null,2);
 }
 export function readOffsetProject(text) {
   const data=JSON.parse(text);
@@ -19,7 +22,7 @@ export function readOffsetProject(text) {
   const required=data.version>=3?expected.filter(k=>!optionalTangents.includes(k)):expected;
   if(required.some(k=>!Object.hasOwn(data.params,k))||Object.keys(data.params).some(k=>!expected.includes(k)))throw new Error('偏移配管專案欄位不完整或含未知欄位。');
   const result=projectInputs(computeOffset({...DEFAULT_OFFSET,...(data.version<3?{planMaxJoints:5}:{}),...data.params,...(data.version===1?{basis:'intersections'}:{})}));
-  return {params:result.params,id:typeof data.id==='string'?data.id.slice(0,40):'OFF-001',notices:legacyOffsetNotices(data.version,result.params)};
+  return {params:result.params,id:typeof data.id==='string'?data.id.slice(0,40):'OFF-001',notices:legacyOffsetNotices(data.version,result.params),medium:data.medium?normalizeMedium(data.medium):null};
 }
 // Version 5 (2026-10): right-handed labels (+Y = left) and factory Ta = centre to mating face.
 // Older saves keep their numbers; tell the user once where the meaning may differ.
