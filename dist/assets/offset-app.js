@@ -1,3 +1,7 @@
+import {mountDraftPersistence} from './project-persistence.js';
+import {routeAngleSensitivity} from './offset-angle-sensitivity.js';
+import {mountAngleCheck} from './angle-check-ui.js';
+import {offsetReviewNotice,acknowledgeOffsetReview,requireOffsetReview} from './offset-project-review.js';
 import {DEFAULT_OFFSET,computeOffset} from './offset-geometry.js';
 import {ASME_PIPE_SIZES} from './pipe-sizes.js';
 import {nominalElbowRadius} from './elbow-input.js';
@@ -17,13 +21,15 @@ import {initFlowPanel,setFlowOd,flowCardLine,getMedium,setMedium,flowContext,set
 import {buildOwnerSheet} from './offset-flow-report.js';
 
 const $=id=>document.getElementById(id),storageKey='special-method-offset-v1';
+const projectDraft=mountDraftPersistence({key:storageKey,name:'偏移配管專案'});
 const supplyKeys=['Kind','Donor','Radius','RadiusMethod','MeasuredArc','FactoryAngle','Takeout','Tangent'];
 let params={...DEFAULT_OFFSET,basis:'ports',solve:'run',layout:'rolling',run:800},id='OFF-001',result,baseline=null,stage=1,sharedStock=true,activePlan=null,routePlans=null,planGeneration=0,piece='P1',selected=0,showErrors=false;
 let editor='position',selectedPort=null,sceneView='iso',sceneFrame=null,dragState=null,dragTick=null,suppressPortClick=0;
 let issues=[],activeIssueId=null,attemptedCalculation=false,searchPending=false;
 let viewer=null,viewerPromise=null,view='offset',printHTML='',printTitle='',toastTimer;
 let solutionViewer=null,solutionViewerPromise=null,solutionView='3d',solutionViewerPlan=null,solutionViewerFailed=false;
-let componentDraft=null,componentIssues=[],legacyNotices=[];
+let componentDraft=null,componentIssues=[],legacyReview=[];
+const offsetAngleCheck=mountAngleCheck($('offset-angle-check'),{title:'量角誤差會讓端口差多少？',current:()=>workRoute(),analyze:routeAngleSensitivity,kind:'offset'});
 function toast(message){$('offset-toast').textContent=message;$('offset-toast').hidden=false;clearTimeout(toastTimer);toastTimer=setTimeout(()=>$('offset-toast').hidden=true,4500);}
 const number=value=>value.trim()===''?null:Number(value);
 const nps=()=>ASME_PIPE_SIZES.find(p=>p.odMm===params.od)?.nps??'custom';
@@ -104,7 +110,7 @@ async function applyComponents(next){
   if(!workRoute()?.valid&&result.context){$('offset-plans').open=true;await comparePlans();}
 }
 const projectReady=()=>result.valid||params.basis==='ports'&&Boolean(result.context);
-function saveDraft(){if(projectReady())try{localStorage.setItem(storageKey,offsetProjectJSON(params,id,getMedium()));}catch{}}
+function saveDraft(){if(!projectReady()){projectDraft.pending('尺寸待修正，目前修改尚未保存');return;}try{projectDraft.write(offsetProjectJSON(params,id,getMedium(),legacyReview));}catch{projectDraft.pending('專案資料需修正，目前修改尚未保存');}}
 function metrics(items){return `<dl class="workflow-metrics">${items.map(([label,value])=>`<div><dt>${label}</dt><dd>${esc(value)}</dd></div>`).join('')}</dl>`;}
 function renderErrors(){
   issues=offsetRecoveryItems(result,{sharedStock});
@@ -165,6 +171,7 @@ function renderRouteContext(){
 }
 
 function renderSolution(){
+  $('offset-angle-check').hidden=!workRoute()?.valid;offsetAngleCheck.sync(workRoute()?.key??JSON.stringify(workRoute()?.params??null));
   const plan=workRoute();$('measurement-summary').textContent=params.basis==='ports'?`X ${fmt(params.run)} · Y ${fmt(params.layout==='rolling'?params.roll:0)} · Z ${fmt(params.rise)} mm`:'理論交點量測模式';
   $('solution-title').textContent=activePlan?routePlanTitle(activePlan):'原兩彎頭接法';$('offset-status').textContent=activePlan?'建議 '+activePlan.id:'原方案';
   $('solution-note').textContent=(activePlan?(baseline?(d=>d>0?`比原接法多 ${d} 個焊口。`:d<0?`比原接法少 ${-d} 個焊口。`:'焊口數與原接法相同。')(activePlan.jointCount-baseline.jointCount):`${activePlan.elbows.length} 個彎頭、${activePlan.pipes.length} 段直管，端口位置與朝向已通過幾何閉合核對。`):'旋轉核對接管方向；點圖上的零件，看加工方式。')+(plan?.components?.length?` 含 ${plan.components.length} 組指定零件、${plan.boltCount} 處螺栓接合；零件外形為辨識示意。`:'');
@@ -224,10 +231,11 @@ var statusStripInstance;// var + function declaration: both are usable before th
 function statusStripUpdate(model){(statusStripInstance??=mountWorkbenchStatus(document.querySelector('.workbench-nav'))).update(model);}
 // Glanceable state: one tone, the numbers a fitter acts on, and every open problem one click away.
 function renderStatus(){
+  $('offset-review').hidden=!legacyReview.length;$('offset-review').innerHTML=legacyReview.length?'<strong>舊專案先核對，再出加工資料</strong>'+legacyReview.map(key=>`<p>${esc(offsetReviewNotice(key))}</p><button type="button" class="button" data-review-confirm="${key}">${key==='legacy-y'?'我已核對 Y、朝向與修正量':'我已核對現成彎頭 Ta'}</button>`).join(''):'';
   const plan=workRoute(),valid=Boolean(plan?.valid),measured=params.basis==='ports'?`X ${fmt(params.run)} · Y ${fmt(params.layout==='planar'?0:params.roll)} · Z ${fmt(params.rise)}`:`偏移 ${fmt(params.rise)}${params.layout==='rolling'?' · 側移 '+fmt(params.roll):''}`,list=[];
   // Once a valid alternative route is chosen, the original route's problems are history, not blockers.
   for(const item of issues)list.push({level:valid&&activePlan?'info':item.inputError?'error':'warn',text:item.title+(item.detail?'：'+item.detail:''),actionLabel:item.actionLabel??'帶我修正',action:()=>{if(stage!==1)goTo(1);showErrors=true;renderErrors();jumpToRecovery(item);}});
-  for(const notice of legacyNotices)list.push({level:'warn',text:notice,actionLabel:'已核對',action:()=>{legacyNotices=legacyNotices.filter(n=>n!==notice);renderStatus();}});
+  for(const key of legacyReview)list.push({level:'warn',text:offsetReviewNotice(key),actionLabel:'前往核對',action:()=>{$('offset-review').scrollIntoView({behavior:'smooth',block:'center'});$('offset-review').querySelector('button')?.focus();}});
   for(const message of componentIssues)list.push({level:'warn',text:message,actionLabel:'看零件',action:()=>{if(stage!==2&&workRoute()?.valid!==undefined)goTo(2);$('component-panel')?.scrollIntoView({behavior:'smooth',block:'center'});}});
   const pipes=plan?.pipes??[],elbows=plan?.elbows??[];
   const metrics=valid?[{label:pipes.length>1?'直管總長':'直管成品',value:fmt(pipes.reduce((s,e)=>s+e.length,0)),unit:'mm'},{label:'彎頭',value:elbows.map(e=>fmt(e.angle,1)+'°').join(' / ')||'—',quiet:elbows.length>2},{label:'焊口',value:String(plan.jointCount??'—'),unit:'個'},{label:'量測',value:measured,quiet:true}]:[{label:'量測',value:measured,quiet:true}];
@@ -251,6 +259,7 @@ function updateStages(){
   viewer?.setActive(stage===3&&$('workflow-model').open&&valid);
   syncSolutionViewer();
   renderStatus();
+  if(legacyReview.length){$('offset-csv').disabled=true;$('print-offset-strips').disabled=true;}
 }
 function stopSolutionSpin(){solutionViewer?.setAutoRotate(false);const button=document.querySelector('[data-solution-motion="spin"]');button.setAttribute('aria-pressed','false');button.textContent='自動旋轉';}
 function syncSolutionViewer(){
@@ -318,6 +327,7 @@ function renderFit(){
 }
 function useFit(round=false){$('fit-a').value=round?Math.round(result.elbows.a.angle*2)/2:result.elbows.a.angle;$('fit-b').value=round?Math.round(result.elbows.b.angle*2)/2:result.elbows.b.angle;$('fit-length').value=result.cutLength;renderFit();}
 function preview(kind){
+  try{requireOffsetReview(legacyReview);}catch(e){toast(e.message);$('offset-review').scrollIntoView({behavior:'smooth',block:'center'});return;}
   if(kind==='owner'){try{printTitle='業主比較單';printHTML=buildOwnerSheet({base:baseline?.valid&&!baseline.legacy?baseline:null,plan:activePlan,ctx:flowContext(),id});$('offset-preview-title').textContent=printTitle;$('offset-print-frame').srcdoc=printHTML;$('offset-preview').showModal();}catch(e){toast(e.message);}return;}
   try{if(!workRoute()?.valid)throw new Error('先選可容納所有指定零件的接法，再列印加工單。');const paper=$('offset-paper').value,fit=fitResult();printTitle=kind==='strips'?'彎頭切角量尺':activePlan?activePlan.id+' 建議加工單':'偏移配管加工單';printHTML=kind==='strips'?buildOffsetStripPaper(result,id,paper):activePlan||baseline?.components?.length?buildRoutePlanWorkOrder(workRoute(),id,paper):buildOffsetWorkOrder(result,id,paper,fit.valid?fit:null);$('offset-preview-title').textContent=printTitle;$('offset-print-frame').srcdoc=printHTML;$('offset-preview').showModal();}catch(e){toast(e.message);}
 }
@@ -368,7 +378,7 @@ function activateVisual(target){
 function renderPieceRail(){const plan=workRoute();$('piece-rail').innerHTML=(plan?.elements??[]).map(e=>`<button type="button" data-piece="${esc(e.id)}" aria-pressed="${piece===e.id}" aria-label="加工 ${esc(e.id)} ${esc(partName(e))}">${e.type==='component'?componentIcon(e.kind):e.type==='pipe'?'<svg viewBox="0 0 76 62" aria-hidden="true"><path d="M13 38h50" stroke="currentColor" stroke-width="15"/></svg>':elbowIcon(e.angle)}<span>${esc(e.id)}</span><small>${e.type==='elbow'?fmt(e.angle,2)+'°':esc(partName(e))}</small></button>`).join('');}
 function choosePiece(value,open=false){piece=value;selected=0;if(open)goTo(3);else{renderPieceRail();$('cut-end').value=piece;renderCut();}setView(activePlan||baseline?.components?.length?piece:['A','B'].includes(piece)?piece.toLowerCase():'offset');}
 $('offset-nps').innerHTML=ASME_PIPE_SIZES.map(p=>`<option value="${esc(p.nps)}">${esc(p.nps)} 吋</option>`).join('')+'<option value="custom">實測外徑</option>';
-let restored=false;try{const saved=localStorage.getItem(storageKey);if(saved){const data=readOffsetProject(saved);params=data.params;id=data.id;legacyNotices=data.notices??[];setMedium(data.medium);restored=true;}}catch{}
+let restored=false;try{const saved=localStorage.getItem(storageKey);if(saved){const data=readOffsetProject(saved);params=data.params;id=data.id;legacyReview=data.review??[];setMedium(data.medium);restored=true;}}catch{projectDraft.protectSaved();}
 const phoneLayout=matchMedia('(max-width:720px)');
 $('job-material-details').open=!phoneLayout.matches;
 phoneLayout.addEventListener('change',event=>$('job-material-details').open=!event.matches);
@@ -427,10 +437,10 @@ $('solution-viewer').addEventListener('keydown',event=>{
 for(const k of ['fit-a','fit-b','fit-length'])$(k).addEventListener('input',renderFit);
 $('fit-use-plan').addEventListener('click',()=>useFit());$('fit-round').addEventListener('click',()=>useFit(true));
 $('offset-paper').addEventListener('change',updatePaper);$('offset-id').addEventListener('input',()=>{id=$('offset-id').value;saveDraft();});
-$('save-offset').addEventListener('click',()=>{try{download(offsetProjectJSON(params,id,getMedium()),'application/json',fileID()+'.offset.json');}catch(e){toast(e.message);}});
+$('save-offset').addEventListener('click',()=>{try{download(offsetProjectJSON(params,id,getMedium(),legacyReview),'application/json',fileID()+'.offset.json');}catch(e){toast(e.message);}});
 $('load-offset').addEventListener('click',()=>$('offset-file').click());
-$('offset-file').addEventListener('change',async()=>{const file=$('offset-file').files[0];if(!file)return;try{if(file.size>100000)throw new Error('專案檔案過大。');const data=readOffsetProject(await file.text());params=data.params;id=data.id;legacyNotices=data.notices??[];setMedium(data.medium);piece='P1';selected=0;stage=1;editor='position';attemptedCalculation=false;showErrors=false;setEditor('position');syncInputs();render();toast('已載入，先核對現場尺寸。');}catch(e){toast('載入失敗：'+e.message);}$('offset-file').value='';});
-$('offset-csv').addEventListener('click',()=>{try{download(activePlan||baseline?.components?.length?routePlanCSV(workRoute()):offsetCSV(result),'text/csv;charset=utf-8',fileID()+(activePlan?'.'+activePlan.id:'')+'.csv');}catch(e){toast(e.message);}});
+$('offset-file').addEventListener('change',async()=>{const file=$('offset-file').files[0];if(!file)return;try{if(file.size>100000)throw new Error('專案檔案過大。');const data=readOffsetProject(await file.text());params=data.params;id=data.id;legacyReview=data.review??[];setMedium(data.medium);piece='P1';selected=0;stage=1;editor='position';attemptedCalculation=false;showErrors=false;setEditor('position');syncInputs();render();toast('已載入，先核對現場尺寸。');}catch(e){toast('載入失敗：'+e.message);}$('offset-file').value='';});
+$('offset-csv').addEventListener('click',()=>{try{requireOffsetReview(legacyReview);download(activePlan||baseline?.components?.length?routePlanCSV(workRoute()):offsetCSV(result),'text/csv;charset=utf-8',fileID()+(activePlan?'.'+activePlan.id:'')+'.csv');}catch(e){toast(e.message);}});
 $('print-offset-strips').addEventListener('click',()=>preview('strips'));
 $('close-offset-preview').addEventListener('click',()=>$('offset-preview').close());
 $('download-offset-print').addEventListener('click',()=>download(printHTML,'text/html;charset=utf-8',fileID()+'.'+printTitle+'.html'));
@@ -474,3 +484,5 @@ for(const panel of [$('offset-errors'),$('offset-repair')])panel.addEventListene
 });
 $('offset-plan-status').addEventListener('click',event=>{const field=event.target.closest('[data-compare-field]');if(field){const route=offsetFieldRoute(field.dataset.compareField,params);jumpToRecovery({id:'plan-check',route});return;}if(event.target.closest('[data-back-stock]')){stage=1;setEditor('stock');updateStages();document.querySelector('.input-editor').scrollIntoView({block:'start',behavior:'instant'});}});
 $('offset-route-context').addEventListener('click',event=>{if(!event.target.closest('[data-expand-search]'))return;params.planMaxElbows=4;params.planMaxJoints=Math.max(8,params.planMaxJoints);$('offset-planMaxElbows').value=params.planMaxElbows;$('offset-planMaxJoints').value=params.planMaxJoints;render();exploreOtherRoutes();});
+
+$('offset-review').addEventListener('click',event=>{const key=event.target.closest('[data-review-confirm]')?.dataset.reviewConfirm;if(!key)return;legacyReview=acknowledgeOffsetReview(legacyReview,key);saveDraft();renderWork();updateStages();});

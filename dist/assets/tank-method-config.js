@@ -174,7 +174,8 @@ export const METHOD_SPECS=Object.freeze({
     hydro:flag(true,'水壓／盛水試驗'),
     testFill:num(100,10,100,'試驗盛水比例 %',{when:g=>g.hydro}),
     pumpRate:num(20,1,2000,'灌水量 m³/h',{when:g=>g.hydro}),
-    lsr:num(1,.5,2,'許用應力比 LSR（壓力容器）',{when:g=>g.hydro}),
+    mawp:num(0,0,100000,'核定 MAWP kPa(g)（0＝未提供）',{when:g=>g.hydro,help:'由正式計算書提供；不以設計壓力自動代入。'}),
+    lsr:num(1,.5,2,'許用應力比 LSR（試算預設 1）',{when:g=>g.hydro,help:'按材料在試驗／設計溫度的許用應力比填寫；預設 1 不代表已確認。'}),
     boxLength:num(750,300,1500,'真空箱長 mm'),
     boxOverlap:num(50,25,300,'真空箱重疊 mm')
   }},
@@ -253,7 +254,7 @@ export function methodContext(g){
 }
 /** PWHT required by thickness? true / false, or null when the WPS decides (other materials). ASME UCS-56 P-No.1 thresholds. */
 export function pwhtRequired(heat,ctx){
-  if(heat.material==='ss')return false;
+  if(heat.material==='ss')return null;
   if(heat.material!=='p1')return null;
   if(ctx.code==='api650')return false;
   return ctx.tMax>38?true:ctx.tMax>32?heat.preheat<95:false;

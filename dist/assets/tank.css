@@ -50,3 +50,5 @@
 
 @media(max-width:640px){.tank-method-swipe{display:block!important;margin:-4px 0 8px;font-size:.75rem;color:#8294a0;text-align:center}.tank-method-visual{overflow-x:auto;-webkit-overflow-scrolling:touch;overscroll-behavior-x:contain}.tank-method-visual svg.tank-method-svg{min-width:560px}}
 .tank-method-swipe{display:none}.tank-method-visual:empty+.tank-method-swipe{display:none!important}
+
+.tank-method-row[data-status=reference] .tank-method-dot{background:#83a9be}.tank-method-status[data-status=reference]{background:#edf4f8;color:#456477}

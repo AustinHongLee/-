@@ -130,6 +130,11 @@ export function planTankNozzles(r,values=r.input.nozzles??[]){
       if(n.inside>=2*Math.sqrt(Math.max(0,ri*ri-(n.od/2)**2)))issue('inside','內凸管嘴已到達對側內壁，請縮短內凸量。');
     }else if(!issues.some(x=>x.id===n.id)){
       if(n.radius+holeRadius>ri)issue('radius','開孔包絡超出槽內徑範圍；請減少偏心或孔徑。');
+      // A square-ended frustum has an outside corner farther out radially by
+      // t sin(beta). Checking only the inside radius accepts a partial wall.
+      const openingRadius=end?.type==='cone'&&end.small>0?end.small/2+end.t*Math.sin(end.angle*Math.PI/180):0;
+      if(openingRadius&&n.radius-holeRadius<openingRadius-1e-7)issue('radius',`錐體小端 Ø${end.small} mm 為既有開口，這個管嘴落在開口內或跨過含板厚的邊緣，沒有完整錐板可供穿入焊接。請移到錐面，或另作小端對接／轉接件設計。`);
+      if(openingRadius&&n.padOD>0&&n.radius-n.padOD/2<openingRadius-1e-7)issue('padOD','補強板跨到錐體小端開口，沒有完整錐面可供貼合；請調整位置或另作轉接設計。');
       const other=r.ends?.[which==='top'?'bottom':'top'],reach=r.height+(end?end.depthAt(n.radius):0)+(other?other.depthAt(n.radius):0);
       if(n.inside>=reach)issue('inside',`內凸管嘴已到達對側${vertical?'底／蓋':'端部'}，請縮短內凸量。`);
     }
@@ -172,7 +177,6 @@ export function planTankNozzles(r,values=r.input.nozzles??[]){
       for(const hit of endSeamHits(r,which,x,z,envelope))warnings.push(`${padRadius>holeRadius?'補強板':'開孔包絡'}碰到${endWord(which,r)}${hit}，需調位置或依正式圖說確認。`);
       if(end.type==='torispherical'&&n.radius+envelope>end.junctionRadius)warnings.push(`開孔${padRadius>holeRadius?'或補強板':''}進入碟形封頭轉角區（冠部半徑 ${end.junctionRadius.toFixed(0)} mm 以外），開孔與補強依規範另確認。`);
       if(end.type==='elliptical'&&n.radius+holeRadius>.4*r.di)warnings.push('開孔超出橢圓封頭中心 0.8D 範圍（ASME 球面部分），開孔與補強依規範另確認。');
-      if(end.type==='cone'&&n.radius-holeRadius<end.small/2&&n.radius+holeRadius>end.small/2)warnings.push('開孔跨到錐體小端開口邊緣，請改位置或把小端出口直接設為管嘴。');
       if(end.type!=='flat'&&sag>0)warnings.push(`端部為曲面：管端內側依曲面修切，最短／最長差 ${sag.toFixed(1)} mm。`);
     }
     if(n.end!=='bare'&&(!n.flangeSize||!n.flangeClass||!n.flangeFacing||!n.flangeMaterial)&&!n.flangeSpec.trim())warnings.push('法蘭規範、尺寸系列、材質、等級及密封面尚待確認。');

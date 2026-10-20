@@ -102,9 +102,13 @@ export function testPlan(r,att,weld){
   const fill=m.hydro?m.testFill/100:0,water=r.volume*fill,mass=water*1000;
   out.water=water;out.waterMass=mass;out.fillHours=water/m.pumpRate;out.totalLoad=(att?.emptyWeight??r.netWeight)+mass;
   out.staticHead=G*levelForVolume(r,water)/1000;// kPa of water at the lowest point at the test level (water level in mm)
-  const pressure=Number(p.pressure),pressurised=['pressure','both'].includes(p.service)||String(p.pressure??'').trim()!==''&&pressure>0;
-  if(pressurised&&pressure>0){out.testPressure=1.3*pressure*m.lsr;out.notes.push(`ASME UG-99(b)：試驗壓力 ≥ 1.3 × MAWP × LSR = 1.3 × ${pressure} × ${m.lsr} = ${out.testPressure.toFixed(1)} kPa(g)（以設計內壓代 MAWP，正式依計算書）；最低點另加水柱 ${out.staticHead.toFixed(1)} kPa。`);}
-  else out.notes.push(p.code==='api650'?'API 650：盛水至最高設計液位做靜水試驗；沉陷與觀察依規範。':'常壓槽：盛水試驗觀察滲漏與沉陷；壓力試驗依規範與合約。');
+  const pressure=Number(p.pressure),mawp=m.mawp,pressurised=mawp>0||['pressure','both'].includes(p.service)||String(p.pressure??'').trim()!==''&&pressure>0;
+  if(m.hydro&&pressurised){
+    out.mawp=mawp;out.lsr=m.lsr;out.pressurePending=!(mawp>0);
+    if(mawp>0){out.testPressure=1.3*mawp*m.lsr;out.notes.push(`試壓參考值：1.3 × 填入 MAWP ${mawp} × LSR ${m.lsr} = ${out.testPressure.toFixed(1)} kPa(g)，最低點水柱另 ${out.staticHead.toFixed(1)} kPa。僅按填入資料試算；正式程序須依適用版次、全部材料許用應力比、溫度與計算書確認。`);}
+    else out.notes.push('核定 MAWP 未提供：不以設計內壓代入試驗壓力。請先取得正式計算書，再填 MAWP 與許用應力比 LSR；目前只估盛水量、荷重與灌水時間。');
+  }else out.notes.push(p.code==='api650'?'API 650：盛水至最高設計液位做靜水試驗；沉陷與觀察依規範。':'盛水／試壓依規範與合約；本頁只列估量與量測記錄。');
+
   const box=Math.max(1,m.boxLength-m.boxOverlap);
   for(const seam of weld?.seams??[])if(seam.group==='end'&&(seam.lap||seam.category==='底'))out.vacuum.push({name:seam.name,length:seam.length,count:Math.ceil(seam.length/box)});
   if(r.endTypes.bottom==='flat'&&r.orientation==='vertical')out.vacuum.push({name:'筒身－底板內側角焊（或滲透）',length:PI*r.di,count:Math.ceil(PI*r.di/box)});
@@ -290,9 +294,9 @@ export function heatPlan(r,att,weld){
   let need=null,reason;
   if(h.material==='p1'){
     if(t>38){need=true;reason=`最厚板 ${t} mm > 38 mm：P-No.1 需 PWHT${reference}`;}
-    else if(t>32){need=h.preheat<95;reason=need?`最厚板 ${t} mm 在 32～38 mm 且未預熱 ≥ 95 °C：需 PWHT${reference}`:`最厚板 ${t} mm 在 32～38 mm，預熱 ${h.preheat} °C ≥ 95 °C：可免 PWHT${reference}`;}
-    else{need=false;reason=`最厚板 ${t} mm ≤ 32 mm：依板厚不需 PWHT${reference}`;}
-  }else if(h.material==='ss'){need=false;reason='沃斯田鐵不鏽鋼（P-No.8）一般不要求 PWHT（ASME UHA-32）';}
+    else if(t>32){need=h.preheat<95;reason=need?`最厚板 ${t} mm 在 32～38 mm 且未預熱 ≥ 95 °C：需 PWHT${reference}`:`最厚板 ${t} mm 在 32～38 mm，預熱 ${h.preheat} °C ≥ 95 °C：這項厚度／預熱條件未觸發 PWHT${reference}，完整豁免仍需另行確認`;}
+    else{need=false;reason=`最厚板 ${t} mm ≤ 32 mm：這項厚度條件未觸發 PWHT${reference}，不代表已完成完整豁免判定`;}
+  }else if(h.material==='ss'){need=null;reason='P-No.8 不套用本工具的 P-No.1 厚度門檻；是否及如何熱處理，依材料、製程、適用規範與 WPS 確認。';}
   else reason='其他材質：是否需 PWHT 依 WPS 與規範';
   if(p.code==='api650'&&h.material==='p1'){
     need=false;reason='API 650 儲槽一般不做整槽 PWHT；厚板大開孔組件另做消除應力';

@@ -112,7 +112,7 @@ test('owner sheet: conclusion, both routes, true-scale section, quality checks a
 });
 test('project file carries the medium; older files and readers are unaffected',()=>{
   const params={...DEFAULT_OFFSET,basis:'ports',solve:'run',layout:'rolling',run:800},saved=JSON.parse(offsetProjectJSON(params,'OFF-1',{...viscous,finish:'ground'}));
-  assert.equal(saved.version,5);assert.equal(saved.medium.kind,'viscous');assert.equal(saved.medium.finish,'ground');
+  assert.equal(saved.version,6);assert.equal(saved.medium.kind,'viscous');assert.equal(saved.medium.finish,'ground');
   assert.deepEqual(readOffsetProject(JSON.stringify(saved)).medium,normalizeMedium({...viscous,finish:'ground'}));
   assert.equal(JSON.parse(offsetProjectJSON(params,'OFF-1',{kind:'none'})).medium,undefined);
   assert.equal(readOffsetProject(offsetProjectJSON(params,'OFF-1')).medium,null);

@@ -1,3 +1,6 @@
+import {mountDraftPersistence} from './project-persistence.js';
+import {jointAngleSensitivity} from './joint-angle-sensitivity.js';
+import {mountAngleCheck} from './angle-check-ui.js';
 import {changeConnection,favoriteIdentity as favoriteSignature,favoriteSummary,settingPanelForField} from './workflow-state.js';
 import {steelTypeCards,steelDimensionsMarkup,steelRotationMarkup,steelChoicePatch,steelDimensionPatch,steelRotationAction,steelRotationKeyboardAction,isSteelSection,sectionFieldLabel} from './steel-ui.js';
 import {computeSteelFaceStations} from './steel-geometry.js';
@@ -34,6 +37,8 @@ const fmt=(v,d=3)=>Number.isFinite(v)?Number(v.toFixed(d)).toString():'—';
 const steps=['管材尺寸','接頭型式','補強板','加工試配','出圖設定'];
 const state={params:freshInputParams({...DEFAULT_PARAMS,angle:90,offset:0,azimuth:0,padEnabled:false}),metadata:{id:'J-001',revision:'1'},mode:'expert',step:0,settingPanel:0,template:'branch-local',result:null,revision:0,fabrication:emptyFabricationPlan(),fabricationError:''};
 let hostDrafts={},connectionDrafts={};
+const projectDraft=mountDraftPersistence({key:'pipe-fabrication:last',name:'插管與支材專案'});
+const jointAngleCheck=mountAngleCheck($('joint-angle-check'),{title:'量角不準，切線會差多少？',current:()=>state.params,analyze:jointAngleSensitivity,kind:'joint'});
 let workspaceView='model',workspaceManual=false;
 function focusToken(){const el=document.activeElement;if(!$('parameter-form').contains(el))return null;if(el.id)return '#'+CSS.escape(el.id);if(el.dataset.visualMap)return `[data-visual-map="${CSS.escape(el.dataset.visualMap)}"]`;if(el.dataset.visualField)return `[data-visual-field="${CSS.escape(el.dataset.visualField)}"][data-visual-value="${CSS.escape(el.dataset.visualValue??'')}"]`;if(el.dataset.settingPanel)return `[data-setting-panel="${el.dataset.settingPanel}"]`;return null;}
 function restoreFocus(token){if(!token)return;const el=$('parameter-form').querySelector(token);if(el&&!el.disabled&&el.getClientRects().length)el.focus({preventScroll:true});}
@@ -115,6 +120,8 @@ function renderForm() {
 }
 function notify(text) {$('toast').textContent=text;$('toast').hidden=false;clearTimeout(toastTimer);toastTimer=setTimeout(()=>$('toast').hidden=true,5000);}
 function displayErrors() {
+  jointAngleCheck.sync(JSON.stringify(state.params));
+  if(!pending&&(!state.result?.valid||state.fabricationError))projectDraft.pending('尺寸或加工紀錄待修正，目前修改尚未保存');
   document.querySelectorAll('[data-field]').forEach(el=>{const err=state.result?.errors.find(e=>e.field===el.dataset.field);el.querySelector('input,select')?.setAttribute('aria-invalid',String(!!err));const target=el.querySelector('.field-error');if(target){target.hidden=!err;target.textContent=err?.message??'';}});
   const errors=[...(state.result?.errors??[])];if(state.fabricationError)errors.push({field:fabricationErrorField,message:state.fabricationError});
   if(state.result?.valid&&!fabricationReadiness(state.result).ready)errors.push({field:'tolerance',message:fabricationReadiness(state.result).reason});
@@ -179,7 +186,7 @@ function compute(recordHistory=true){
 }
 async function performCompute(recordHistory=true) {
   closeAnglePanel();
-  clearTimeout(timer);pending=true;modelEditor.setPending(state.params);syncModelControls();for(const id of ['svg-export','dxf-export','csv-export','report-button','quick-report','print-current-pattern','full-report','step-report'])if($(id))$(id).disabled=true;$('geometry-status').textContent='計算中…';$('paper-ready').textContent='計算中…';renderJointStatus();state.fabricationError='';try{const checked=reconcileFitRecords(state.fabrication,state.params);state.fabrication=checked.plan;if(checked.cleared){renderFitup(true);notify('尺寸已改變，舊實測紀錄已清空，請重新試配。');}}catch(error){state.fabricationError=error.message;}if($('report-preview').open)$('report-preview').close();const requested={...state.params},requestedKey=JSON.stringify(requested),previousSection=state.result?.params?.branchSection,previousHost=state.result?.params?.hostType;try{const calculated=await computeLatestJoint(requested);if(requestedKey!==JSON.stringify(state.params))return;state.result=calculated;}catch(error){if(error.name==='AbortError')return;state.result={valid:false,params:requested,errors:[{field:'elbowGeometry',message:'計算未完成：'+error.message+'。請修正尺寸或再試一次。'}],templates:[],verification:[],warnings:[],geometry:null,measurements:{},stationTable:[]};notify(error.message);}pending=false;state.revision++;
+  clearTimeout(timer);pending=true;projectDraft.pending('計算中，目前修改尚未保存');modelEditor.setPending(state.params);syncModelControls();for(const id of ['svg-export','dxf-export','csv-export','report-button','quick-report','print-current-pattern','full-report','step-report'])if($(id))$(id).disabled=true;$('geometry-status').textContent='計算中…';$('paper-ready').textContent='計算中…';renderJointStatus();state.fabricationError='';try{const checked=reconcileFitRecords(state.fabrication,state.params);state.fabrication=checked.plan;if(checked.cleared){renderFitup(true);notify('尺寸已改變，舊實測紀錄已清空，請重新試配。');}}catch(error){state.fabricationError=error.message;}if($('report-preview').open)$('report-preview').close();const requested={...state.params},requestedKey=JSON.stringify(requested),previousSection=state.result?.params?.branchSection,previousHost=state.result?.params?.hostType;try{const calculated=await computeLatestJoint(requested);if(requestedKey!==JSON.stringify(state.params))return;state.result=calculated;}catch(error){if(error.name==='AbortError')return;state.result={valid:false,params:requested,errors:[{field:'elbowGeometry',message:'計算未完成：'+error.message+'。請修正尺寸或再試一次。'}],templates:[],verification:[],warnings:[],geometry:null,measurements:{},stationTable:[]};notify(error.message);}pending=false;state.revision++;
   // The operator can edit process measurements while the geometry worker runs.
   // Commit against the current record, not the copy checked before awaiting.
   state.fabricationError='';try{const checked=reconcileFitRecords(state.fabrication,state.params);state.fabrication=checked.plan;if(checked.cleared)renderFitup(true);}catch(error){state.fabricationError=error.message;}
@@ -342,7 +349,7 @@ function fitReportPreview(){
   // independently and can push a 25-row table into its footer on a phone.
   style.textContent=`@media screen{.preview-sheet{margin:8mm auto;overflow:hidden;background:white;box-shadow:0 1mm 4mm #0002}.page{margin:0!important;transform:scale(${scale});transform-origin:top left;box-shadow:none!important}body{overflow-x:hidden;}}@media print{.preview-sheet{display:contents}.preview-sheet>.page{transform:none!important;zoom:1!important;break-after:page;page-break-after:always}.preview-sheet[data-preview-last="true"]>.page{break-after:auto;page-break-after:auto}}`;
 }
-function persistProject(){try{localStorage.setItem('pipe-fabrication:last',projectJSON(state.params,state.metadata,state.fabrication));localStorage.setItem('pipe-fabrication:input-setup',JSON.stringify({paramsKey:JSON.stringify(state.params),setup:inputSetup}));}catch{}}
+function persistProject(){let text;try{text=projectJSON(state.params,state.metadata,state.fabrication);}catch{projectDraft.pending('專案資料需修正，目前修改尚未保存');return;}const saved=projectDraft.write(text);if(!saved.saved)return;try{localStorage.setItem('pipe-fabrication:input-setup',JSON.stringify({paramsKey:JSON.stringify(state.params),setup:inputSetup}));}catch{/* Optional input preferences do not invalidate the saved project. */}}
 function renderFavorites(){const selected=$('favorite-select').value===''?null:favorites[Number($('favorite-select').value)]?.params,signature=selected?favoriteSignature(selected):null;$('favorite-select').innerHTML='<option value="">選擇已記住的尺寸</option>'+favorites.map((f,i)=>`<option value="${i}">${esc(favoriteSummary(f.params))}</option>`).join('');const index=signature?favorites.findIndex(f=>favoriteSignature(f.params)===signature):-1;$('favorite-select').value=index<0?'':String(index);renderFavoriteSummary();}
 function renderFavoriteSummary(){const value=$('favorite-select').value,f=value===''?null:favorites[Number(value)];$('apply-favorite').disabled=!f;$('favorite-summary').hidden=!f;$('favorite-summary').textContent=f?favoriteSummary(f.params,{detailed:true}):'';}
 function loadParameters(params,metadata=state.metadata,recordHistory=true,savedSetup=null,plan=emptyFabricationPlan()){const candidate={...DEFAULT_PARAMS,...params},known=[lastValid,...history].some(record=>record&&JSON.stringify(record.params)===JSON.stringify(candidate)),r=known?{valid:true}:computeJoint(candidate);if(!r.valid)throw new Error(r.errors.map(e=>e.message).join(' '));const restoredPlan=reconcileFitRecords(plan,candidate).plan;endControls.close();state.params=candidate;hostDrafts={};connectionDrafts={};state.fabrication=restoredPlan;renderFitup(true);syncInputSetup(savedSetup);state.metadata={...metadata};updateIdentity();renderForm();compute(recordHistory);viewer.fit();}
@@ -449,7 +456,7 @@ try{
     state.params=params;state.fabrication=reconcileFitRecords(project.fabrication??emptyFabricationPlan(),params).plan;syncInputSetup();state.metadata={...state.metadata,...project.metadata};
     try{const savedSetup=JSON.parse(localStorage.getItem('pipe-fabrication:input-setup')||'null');if(savedSetup?.paramsKey===JSON.stringify(params))syncInputSetup(savedSetup.setup);}catch{}
   }
-}catch{}
+}catch{projectDraft.protectSaved();}
 try{const saved=JSON.parse(localStorage.getItem('pipe-fabrication:favorites')||'[]');if(Array.isArray(saved))favorites=saved.filter(f=>typeof f.name==='string'&&f.name.length<250&&f.params&&(()=>{try{validateProjectParams(f.params);favoriteSignature(f.params);return !(f.params.hostType==='straight'&&f.params.motherOpening===false&&!isSteelSection(f.params));}catch{return false;}})()).slice(0,12);}catch{}
 updateIdentity();renderFavorites();renderForm();renderFitup(true);const initialComputation=compute(false);showWorkspace('model');await initialComputation;
 

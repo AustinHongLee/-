@@ -4,7 +4,7 @@ import * as V from './tank-method-visuals.js';
 import {methodCatalog,stageSummary} from './tank-methods.js';
 import {PROCESS_LABELS} from './tank-method-config.js';
 const esc=V.esc,fmt=V.fmt;
-export const STATUS_LABELS=Object.freeze({ok:'正常',warn:'需判斷',error:'需修正',off:'未加入'});
+export const STATUS_LABELS=Object.freeze({ok:'正常',reference:'估算／參考',warn:'需判斷',error:'需修正',off:'未加入'});
 /** Drawing(s) for one card. `print` shows every pad / manhole instead of the selected one. */
 export function cardVisual(card,r,{padNozzle=null,print=false}={}){
   const which=card.fieldScope;
@@ -30,7 +30,7 @@ function table(head,rows,{collapsed=false,summary=''}={}){
 /** Tables for one card (HTML). On screen long tables are collapsed; in print everything is shown. */
 export function cardTables(card,r,{print=false}={}){
   const pr=r.process;
-  if(card.id==='welding'&&pr)return table(['焊縫','型式','長度 m','焊材 kg'],pr.weld.seams.slice(0,print?200:40).map(s=>[esc(s.name),esc(s.kind==='butt'?`${s.groove.type} 對接 t${s.t}`:`角焊 ${s.leg}`),fmt(s.length/1000,2),fmt(s.consumable,2)]))+`<p class="tank-note">${esc(pr.weld.nde.modeLabel)}：${esc(pr.weld.nde.detail.join('；')||'—')}</p>`;
+  if(card.id==='welding'&&pr)return table(['焊縫','型式','長度 m','焊材 kg'],(print?pr.weld.seams:pr.weld.seams.slice(0,40)).map(s=>[esc(s.name),esc(s.kind==='butt'?`${s.groove.type} 對接 t${s.t}`:`角焊 ${s.leg}`),fmt(s.length/1000,2),fmt(s.consumable,2)]))+`<p class="tank-note">${esc(pr.weld.nde.modeLabel)}：${esc(pr.weld.nde.detail.join('；')||'—')}</p>`;
   if(card.id==='cutting'&&pr)return table(['零件','板厚 mm','件數','起割次數','切割長度 m'],pr.cutting.rows.map(x=>[esc(`${x.id} ${x.name}`),x.t===null?'—':fmt(x.t),x.pieces?String(x.pieces):'—',String(x.contours),fmt(x.length/1000,2)]));
   if(card.id==='heat'&&pr?.heat.cycle){const c=pr.heat.cycle,local=r.methods.heat.method==='local';return table(['階段','溫度 °C','時間'],[[local?'起控':'入爐',`≤ ${c.load}`,'—'],['升溫',`${c.load} → ${fmt(c.hold,0)}`,`${fmt(c.upHours,1)} h（≤ ${fmt(c.heatRate,0)} °C/h）`],['持溫',fmt(c.hold,0),`${fmt(c.holdHours*60,0)} 分`],['降溫',`${fmt(c.hold,0)} → ${c.load}`,`${fmt(c.downHours,1)} h（≤ ${fmt(c.coolRate,0)} °C/h）`],[local?'結束':'出爐',`≤ ${c.load}`,local?'保溫緩冷':'靜止空氣冷卻']])+(pr.heat.local?table(['局部熱處理焊縫','長度 m','道數'],pr.heat.local.seams.map(x=>[esc(x.name),fmt(x.length/1000,2),String(x.count)])):'');}
   if(card.id==='inspection'&&pr)return table(['項目','允差','依據'],pr.tolerances.items.map(i=>[esc(i.name),i.value===null?esc(i.formula):`${i.unit.startsWith('±')?'±':''}${fmt(i.value,1)} mm`,esc(i.basis)]))+table(['真空箱焊縫','長度 m','次數'],pr.test.vacuum.map(v=>[esc(v.name),fmt(v.length/1000,1),String(v.count)]));
@@ -49,7 +49,7 @@ export function methodPages(r,page){
     const metrics=(card.metrics??[]).length?`<table class="metrics"><tr>${card.metrics.map(m=>`<th>${esc(m.label)}</th>`).join('')}</tr><tr>${card.metrics.map(m=>`<td>${esc(m.value)} ${esc(m.unit)}</td>`).join('')}</tr></table>`:'';
     const warnings=(card.warnings??[]).length?`<div class="notice">${card.warnings.map(w=>`<p>${esc(w.text)}</p>`).join('')}</div>`:'';
     const notes=card.notes?.length?`<h2>計算依據與注意事項</h2><ul>${card.notes.map(n=>`<li>${esc(n)}</li>`).join('')}</ul>`:'';
-    pages.push(page(card.title,`<h1>${esc(card.title)}</h1><p class="status">${esc(card.summary)}${card.status!=='ok'?` · ${STATUS_LABELS[card.status]}`:''}</p><div class="method-visual">${cardVisual(card,r,{print:true})}</div>${metrics}${warnings}${cardTables(card,r,{print:true})}${notes}`));
+    pages.push(page(card.title,`<div class="method-content"><h1>${esc(card.title)}</h1><p class="status">${esc(card.summary)}${card.status!=='ok'?` · ${STATUS_LABELS[card.status]}`:''}</p><div class="method-visual">${cardVisual(card,r,{print:true})}</div>${metrics}${warnings}${cardTables(card,r,{print:true})}${notes}</div>`));
   }
   return pages;
 }
@@ -66,11 +66,11 @@ export function methodCSVRows(r){
   rows.push(['焊縫合計 mm',w.totals.length],['熔敷金屬合計 kg',w.totals.metal],['焊材合計 kg',w.totals.consumable]);if(w.flux)rows.push(['SAW 焊劑約 kg',w.flux]);
   rows.push([],['射線檢驗',w.nde.modeLabel],['RT 處數',w.nde.spots],['RT 長度 mm',w.nde.rtLength],['底片約',w.nde.films]);for(const d of w.nde.detail)rows.push(['RT 明細',d]);if(w.nde.ptNote)rows.push(['PT／MT',w.nde.ptNote]);
   for(const t of pr.tolerances.items)rows.push(['尺寸允差：'+t.name,t.value===null?t.formula:t.value,t.unit,t.basis]);
-  const t=pr.test;rows.push([],['盛水試驗',t.hydro?'是':'否'],['試驗水量 m³',t.water],['灌水時間 h',t.fillHours],['試驗總重 kg',t.totalLoad]);if(t.testPressure)rows.push(['試驗壓力 kPa(g)',t.testPressure],['最低點水柱 kPa',t.staticHead]);
+  const t=pr.test;rows.push([],['盛水試驗',t.hydro?'是':'否'],['試驗水量 m³',t.water],['灌水時間 h',t.fillHours],['試驗總重 kg',t.totalLoad]);if(t.pressurePending)rows.push(['試壓參考值','待填核定 MAWP，未以設計內壓代入']);if(t.mawp>0)rows.push(['填入 MAWP kPa(g)',t.mawp],['填入許用應力比 LSR',t.lsr]);if(t.testPressure)rows.push(['試壓參考值 kPa(g)（依填入 MAWP／LSR）',t.testPressure],['最低點水柱 kPa',t.staticHead]);
   for(const v of t.vacuum)rows.push(['真空箱：'+v.name,v.length,v.count]);if(t.padTests)rows.push(['補強板試漏 片',t.padTests]);
   const c=pr.cutting;rows.push([],['切割零件','板厚 mm','件數','起割次數','切割長度 mm']);for(const x of c.rows)rows.push([`${x.id} ${x.name}`,x.t??'',x.pieces,x.contours,x.length]);
   rows.push(['切割合計 mm',c.total],['穿孔／起割 次',c.pierces],['單面坡口邊 mm',c.bevel.single],['雙面坡口邊 mm',c.bevel.double],['管端坡口 mm',c.bevel.pipe],['型鋼／管鋸切 刀',c.bars+c.pipeEnds]);if(c.cutHours!==undefined)rows.push(['切割工時 h',c.cutHours]);if(c.bevelHours!==undefined)rows.push(['坡口工時 h',c.bevelHours]);
-  const h=pr.heat;rows.push([],['PWHT 判定',h.need===true?'需要':h.need===false?'不需':'依 WPS',h.reason],['PWHT 執行',h.perform?'是':'否']);
+  const h=pr.heat;rows.push([],['PWHT 判定',h.need===true?'條件觸發':h.need===false?'這項條件未觸發':'待確認',h.reason],['PWHT 執行',h.perform?'是':'否']);
   if(h.cycle)rows.push(['持溫 °C',h.cycle.hold],['持溫 分',h.cycle.holdHours*60],['升溫上限 °C/h',h.cycle.heatRate],['降溫上限 °C/h',h.cycle.coolRate],['425 °C 以上 h',h.cycle.controlled]);
   if(h.furnace?.heats)rows.push(['入爐次數',h.furnace.heats]);if(h.local)rows.push(['局部持溫帶 mm',h.local.band],['局部 PWHT 焊縫 mm',h.local.length]);
   const s=pr.surface;rows.push([],['表面積','m²']);for(const [k,label] of Object.entries({shellOut:'筒身外',shellIn:'筒身內',topOut:'上端外',topIn:'上端內',bottomOut:'下端外',bottomIn:'下端內',nozzlesOut:'管嘴外',nozzlesIn:'管嘴內',attachments:'附件'}))if(s.areas[k]>0)rows.push([label,s.areas[k]]);

@@ -1,3 +1,4 @@
+import {legacyReviewKeys,validateOffsetReview,offsetReviewNotice} from './offset-project-review.js';
 import {computeOffset,DEFAULT_OFFSET,OFFSET_REFERENCES,offsetSurfaceFrame} from './offset-geometry.js';
 import {offsetDiagramSVG} from './offset-diagram.js';
 import {elbowFabricationSVG,elbowCutSteps} from './offset-fabrication.js';
@@ -10,29 +11,25 @@ function checked(result){if(!result?.valid)throw new Error('尺寸無效，請�
 // A project stores measured inputs; manufacturing exports still require a closed, selected route.
 function projectInputs(result){if(!result.valid&&!(result.params.basis==='ports'&&result.context))throw new Error(result.errors.map(e=>e.message).join(' '));return result;}
 // An optional medium (flow comparison for the owner) travels with the project; older readers ignore it.
-export function offsetProjectJSON(params,id='OFF-001',medium=null) {
+export function offsetProjectJSON(params,id='OFF-001',medium=null,review=[]) {
   const r=projectInputs(computeOffset(params)),m=medium?normalizeMedium(medium):null;
-  return JSON.stringify({format:'special-method-offset',version:5,id:String(id).slice(0,40),params:r.params,...(m&&m.kind!=='none'?{medium:m}:{})},null,2);
+  return JSON.stringify({format:'special-method-offset',version:6,id:String(id).slice(0,40),params:r.params,review:validateOffsetReview(review),...(m&&m.kind!=='none'?{medium:m}:{})},null,2);
 }
 export function readOffsetProject(text) {
   const data=JSON.parse(text);
-  if(data?.format!=='special-method-offset'||![1,2,3,4,5].includes(data.version)||!data.params||typeof data.params!=='object'||Array.isArray(data.params))throw new Error('不是支援的偏移配管專案。');
+  if(data?.format!=='special-method-offset'||![1,2,3,4,5,6].includes(data.version)||!data.params||typeof data.params!=='object'||Array.isArray(data.params))throw new Error('不是支援的偏移配管專案。');
   const keys=Object.keys(DEFAULT_OFFSET),expected=data.version===1?keys.slice(0,keys.indexOf('basis')):data.version===2?keys.slice(0,keys.indexOf('planPreference')):data.version===3?keys.filter(k=>k!=='components'):keys;
   const optionalTangents=['planAOtherTangent','planBOtherTangent','planExtraInTangent','planExtraOutTangent'];
   const required=data.version>=3?expected.filter(k=>!optionalTangents.includes(k)):expected;
   if(required.some(k=>!Object.hasOwn(data.params,k))||Object.keys(data.params).some(k=>!expected.includes(k)))throw new Error('偏移配管專案欄位不完整或含未知欄位。');
   const result=projectInputs(computeOffset({...DEFAULT_OFFSET,...(data.version<3?{planMaxJoints:5}:{}),...data.params,...(data.version===1?{basis:'intersections'}:{})}));
-  return {params:result.params,id:typeof data.id==='string'?data.id.slice(0,40):'OFF-001',notices:legacyOffsetNotices(data.version,result.params),medium:data.medium?normalizeMedium(data.medium):null};
+  const review=[...new Set([...legacyReviewKeys(data.version,result.params),...validateOffsetReview(data.review)])];
+  return {review,params:result.params,id:typeof data.id==='string'?data.id.slice(0,40):'OFF-001',notices:review.map(offsetReviewNotice),medium:data.medium?normalizeMedium(data.medium):null};
 }
 // Version 5 (2026-10): right-handed labels (+Y = left) and factory Ta = centre to mating face.
-// Older saves keep their numbers; tell the user once where the meaning may differ.
-export function legacyOffsetNotices(version,p){
-  if(version>=5)return [];const notices=[];
-  const usesY=p.layout==='rolling'&&Number(p.roll)!==0||['aAxis','bAxis'].some(k=>String(p[k]).startsWith('y'))||['a','b'].some(e=>p[e+'Axis']==='custom'&&Number(p[e+'AxisY'])!==0)||p.datum==='marks'&&(Number(p.aShiftY)!==0||Number(p.bShiftY)!==0);
-  if(usesY)notices.push('此專案存於舊版（Y 標示右為正）。現在採右手座標：前＋X、左＋Y、上＋Z。若當初往右量為正，請將 Y、±Y 朝向與 Y 修正量反號後再出單。');
-  if(['a','b'].some(e=>p[e+'Kind']==='factory'&&Number(p[e+'Tangent'])>0))notices.push('此專案的現成彎頭曾另加保留端直段；現在 Ta 即中心至接合端面，直管長度已依此重算，請核對 Ta。');
-  return notices;
-}
+// Older saves keep their numbers; v6 carries pending reviews until acknowledged.
+export function legacyOffsetNotices(version,p){return legacyReviewKeys(version,p).map(offsetReviewNotice);}
+
 const csvCell = v => '"'+String(v).replaceAll('"','""')+'"';
 export function offsetCSV(result) {
   const r=checked(result),ports=r.basis==='ports',rows=[['項目','值','單位／基準'],['量測模式',ports?'既有端口':'理論交點',''],[ports?'端口 ΔZ 高低':'高低差／平面偏移',r.rise,ports?'mm；端面中心':'mm；中心線'],[ports?'端口 ΔY 左右（左＋）':'側移',r.roll,ports?'mm；端面中心':'mm；中心線'],['真正偏移',r.offset,ports?'mm；B 端面中心到 A 管軸的垂距':'mm'],[r.basis==='ports'?'端口 ΔX':'Run',r.run,r.basis==='ports'?'mm；端面中心':'mm；兩理論交點沿入口軸'],['Travel',r.travel,'mm；兩理論交點沿斜管軸'],['A 所需彎頭角度',r.elbows.a.angle,'deg'],['B 所需彎頭角度',r.elbows.b.angle,'deg'],['A 端 Ta',r.elbows.a.takeout,'mm'],['B 端 Tb',r.elbows.b.takeout,'mm'],['A 端焊口間隙',r.elbows.a.gap,'mm；G2'],['B 端焊口間隙',r.elbows.b.gap,'mm；G3'],['直管裁切長',r.cutLength,'mm；兩端面沿管軸']];

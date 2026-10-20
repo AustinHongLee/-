@@ -39,7 +39,7 @@ test('PWHT holding time and UCS-56 rates follow the inch rules, with the 15-minu
 test('PWHT decision: P-No.1 thresholds, preheat exemption, API 650 opening assemblies, stainless and other materials',()=>{
   const plan=(t,code,heat)=>tank({shellThickness:t,endThickness:t,code},{heat}).process.heat;
   assert.equal(plan(32,'asme',{}).need,false);assert.equal(plan(35,'asme',{}).need,true);assert.equal(plan(35,'asme',{preheat:95}).need,false);
-  assert.equal(plan(39,'asme',{preheat:200}).need,true);assert.equal(plan(39,'asme',{material:'ss'}).need,false);assert.equal(plan(39,'asme',{material:'other'}).need,null);
+  assert.equal(plan(39,'asme',{preheat:200}).need,true);assert.equal(plan(39,'asme',{material:'ss'}).need,null);assert.equal(plan(39,'asme',{material:'other'}).need,null);
   // Required but switched off is flagged; switched on without requirement still plans the cycle.
   assert.ok(plan(40,'asme',{pwht:'no'}).warnings.some(w=>/需 PWHT/.test(w)));
   const forced=plan(10,'asme',{pwht:'yes'});assert.equal(forced.perform,true);rel(forced.cycle.holdHours,10/25.4);
@@ -121,10 +121,11 @@ test('level table: the working level returns the working volume; exact quartile 
     for(const k of [.25,.5,.75])rel(volumeAtLevel(r,levelForVolume(r,r.volume*k)),r.volume*k,1e-9);
   }
 });
-test('method cards: new topics present, standing disclaimers stay in notes and do not raise the status',()=>{
+test('method cards distinguish load estimates from a strength or code approval',()=>{
   const r=tank({},{supports:{type:'lugs'},internals:{baffles:true},jacket:{type:'halfpipe'},lifting:{enabled:true}}),cards=methodCatalog(r),by=id=>cards.find(c=>c.id===id);
   for(const id of ['cutting','heat','misc'])assert.ok(by(id),id);
-  for(const id of ['supports','internals','jacket','lifting']){assert.equal(by(id).status,'ok',id);assert.ok(by(id).notes.length>0,id+' keeps its note');}
+  for(const id of ['supports','lifting'])assert.equal(by(id).status,'reference',id);
+  for(const id of ['internals','jacket']){assert.equal(by(id).status,'ok',id);assert.ok(by(id).notes.length>0,id+' keeps its note');}
   assert.equal(by('misc').status,'off');
 });
 const configs=[

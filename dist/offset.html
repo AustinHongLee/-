@@ -16,6 +16,7 @@
   <main class="offset-workspace">
     <div class="workflow-title"><div><p class="offset-eyebrow">OFFSET PIPE</p><h1>偏移配管</h1></div><p>把兩個管口接起來。</p></div>
     <nav class="workflow-steps" aria-label="加工流程"><button type="button" data-step="1" aria-current="step"><span>1</span>量端口</button><button type="button" data-step="2"><span>2</span>選接法</button><button type="button" data-step="3"><span>3</span>看加工單</button></nav>
+    <section id="offset-review" class="recovery-summary" role="alert" hidden></section>
     <div id="offset-errors" class="recovery-summary" role="alert" hidden></div>
     <section data-stage="1" aria-labelledby="measure-title">
       <div class="workflow-stage-head"><h2 id="measure-title">先量兩個端口的距離</h2><p>點圖操作，尺寸用 mm。</p></div>
@@ -68,6 +69,7 @@
           <div id="solution-diagram" hidden></div>
           <p id="solution-view-hint" class="solution-view-hint">拖曳旋轉 · 滾輪／雙指縮放 · 點零件看加工</p>
         </div><div id="offset-values"></div></div></section>
+      <details id="offset-angle-check" class="workflow-optional"></details>
       <details class="offset-plans" id="offset-plans"><summary>比較其他接法 <span>整支／對半切彎頭</span></summary><div class="comparison-content"><p class="offset-help">只提供備選，焊口數與新增管段一起比較。</p><button class="button" type="button" id="compare-offset-plans">找接法建議</button>
         <details class="offset-plan-options"><summary>比較條件 · 預設焊口少，上限 8 個焊口</summary>
           <div class="fields-grid">

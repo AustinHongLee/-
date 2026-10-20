@@ -123,8 +123,8 @@ test('axis-parallel nozzles on curved ends: lengths follow the inside / outside 
   let outAt=0;{let best=Infinity;for(let k=0;k<=200000;k++){const u=k/200000*Math.PI/2,x=600*Math.cos(u),y=c*Math.sin(u),nx=c*Math.cos(u),ny=600*Math.sin(u),m=Math.hypot(nx,ny),ox=x+6*nx/m,oy=y+6*ny/m;if(Math.abs(ox-300)<best){best=Math.abs(ox-300);outAt=oy;}}}
   near(a.minCutLength,200+outAt-dIn(300-57.15),.05);near(a.maxCutLength,200+outAt-dIn(300+57.15),.05);
   near(a.surface[1],r.frame.topTangent+outAt,.05);assert.deepEqual(a.direction,[0,1,0]);
-  const cone=estimateTank({shape:'custom',top:'flat',bottom:'cone',bottomAngle:60,bottomSmall:120,diameter:1200,height:2000,nozzles:[{...n,host:'bottom',radius:0,od:114.3}]});assert.equal(cone.nozzlePlan.valid,true);
-  const outlet=cone.nozzlePlan.items[0];near(outlet.minCutLength,outlet.maxCutLength,1e-9);near(outlet.surface[1],cone.frame.bottomTangent-cone.ends.bottom.outer,1e-6);
+  const cone=estimateTank({shape:'custom',top:'flat',bottom:'cone',bottomAngle:60,bottomSmall:120,diameter:1200,height:2000,nozzles:[{...n,host:'bottom',radius:0,od:114.3}]});assert.equal(cone.nozzlePlan.valid,false);
+  assert.ok(cone.nozzlePlan.issues.some(e=>e.field==='radius'&&/開口/.test(e.message)));
 });
 test('forming strain uses the ASME UG-79 single/double curvature forms; equal-area blank is reference only',()=>{
   near(formingStrain(6,603,'single'),50*6/603,1e-12);near(formingStrain(6,150,'double'),3,1e-12);assert.equal(formingStrain(6,0,'single'),null);

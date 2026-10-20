@@ -1,3 +1,4 @@
+import {mountDraftPersistence} from './project-persistence.js';
 import {TANK_DEFAULTS,fieldLabel,tankEnds,TOP_NAMES,BOTTOM_NAMES} from './tank-geometry.js';
 import {TOP_ENDS,BOTTOM_ENDS,HORIZONTAL_ENDS,FORMED_ENDS,BUTT_ENDS,END_LABELS} from './tank-heads.js';
 import {TankMethodUI} from './tank-method-ui.js';
@@ -11,6 +12,7 @@ import {TankNozzleUI} from './tank-nozzle-ui.js';
 import {nozzleIssueKey} from './tank-nozzles.js';
 import {mountWorkbenchStatus} from './workbench-status.js';
 const $=id=>document.getElementById(id),form=$('tank-inputs'),key='special-method-tank-v1';
+const projectDraft=mountDraftPersistence({key,name:'桶槽專案'});
 let solve='volume',result=null,view='dimensions',viewer=null,viewerPromise=null,spin=false,transparent=false,order='',toastTimer,selectedPiece='S1',nozzleHighlighted=null;
 const control=name=>form.querySelector(`[name="${name}"]`);
 const nozzleUI=new TankNozzleUI({form,onChange:render,onSelect:id=>{nozzleHighlighted=id;if(id)panel('nozzles');if(result?.valid)renderAssembly();viewer?.setNozzleSelected(id);},onShape:()=>{setConfig({...currentConfig(),top:'flat'});render();},on3D:async()=>{nozzleHighlighted=nozzleUI.selected;if(result?.valid)renderAssembly();await setView('3d');viewer?.setNozzleSelected(nozzleHighlighted);$('tank-3d-area').scrollIntoView({behavior:'smooth',block:'center'});}});
@@ -84,7 +86,7 @@ const CONFLICT=/相交|碰到|低於|無法|伸到|不一致|超出/;
 function openNozzle(id,field){if(id)nozzleUI.select(id);panel('nozzles');requestAnimationFrame(()=>{const el=field&&form.querySelector(`[data-nozzle-field="${field}"]`);const target=el&&!el.closest('[hidden]')?el:$('tank-nozzle-add')?.closest('section');target?.scrollIntoView({behavior:'smooth',block:'center'});if(el&&!el.closest('[hidden]'))el.focus({preventScroll:true});});}
 function renderStatus(p){
   const r=result,issues=[];
-  if(!r.valid){for(const issue of r.issues)issues.push({level:'error',text:issue.message,actionLabel:'前往修改',action:()=>focusField(issue.field)});statusStripUpdate({tone:'error',title:'尺寸待修正',detail:'修正後才會估料與出圖',issues,metrics:[]});return;}
+  if(!r.valid){projectDraft.pending('尺寸待修正，目前修改尚未保存');for(const issue of r.issues)issues.push({level:'error',text:issue.message,actionLabel:'前往修改',action:()=>focusField(issue.field)});statusStripUpdate({tone:'error',title:'尺寸待修正',detail:'修正後才會估料與出圖',issues,metrics:[]});return;}
   for(const issue of r.materialIssues){const part=[...r.parts].find(x=>x.id===issue.part),end=part?.ends?.[0]??(part?.id?.startsWith('T')?'top':part?.id?.startsWith('B')?'bottom':null);
     issues.push(part?.kind==='circle'&&end&&r.endTypes[end]==='flat'?{level:'error',text:issue.message,actionLabel:'改用拼板',action:()=>{methodUI.set('layout.'+end,'strips');panel('methods');methodUI.select(end);}}:{level:'error',text:issue.message,actionLabel:'修改原板',action:()=>focusField(issue.field)});}
   for(const issue of r.fabrication?.issues??[])issues.push({level:'error',text:'工法：'+issue.message,actionLabel:'修改',action:()=>focusField(issue.field)});
@@ -131,12 +133,12 @@ function render(){
   $('tank-totals').innerHTML=totalsMarkup(r);
   $('tank-material-issues').hidden=!r.materialIssues.length;$('tank-material-issues').innerHTML=r.materialIssues.map(issue=>`<button type="button" data-focus="${issue.field}">${esc(issue.message)} → 修改原板</button>`).join('');
   for(const issue of r.materialIssues)control(issue.field)?.setAttribute('aria-invalid','true');
-  $('tank-parts').innerHTML=r.parts.map(part=>`<article class="tank-part"><div class="tank-part-head"><h3>${esc(part.id+' · '+part.name)}</h3><span>${part.quantity} ${part.kind==='formed'?'只':'片'}</span></div><p class="tank-cut-size">${part.kind==='formed'?'內徑 '+fmt(r.di)+' · t'+fmt(part.thickness)+' mm':part.kind==='circle'?'先下料 Ø '+fmt(part.blankDiameter,2)+' × t'+fmt(part.thickness)+' mm':'先下料 '+fmt(part.width,2)+' × '+fmt(part.height,2)+' × t'+fmt(part.thickness)+' mm'}</p><p>${part.kind==='rectangle'?`修邊後 ${fmt(part.finishedWidth,2)} × ${fmt(part.finishedHeight,2)} mm · ${r.courses} 圈，每圈 ${r.panelsPerCourse} 片`:part.finishedDiameter?'成品圓徑 '+fmt(part.finishedDiameter,2)+' mm':`封頭深度約 ${fmt(r.headDepth)} mm · 直邊 ${fmt(r.input.headStraight)} mm${part.weightEstimated?' · 重量按曲面概算':''}`}</p><p>成品估重 ${fmt(part.netWeight)} kg${part.sheetIDs.length?' · 排在原板 #'+part.sheetIDs.slice(0,8).join('、#')+(part.sheetIDs.length>8?'…':''):part.kind==='formed'?' · 向封頭廠商訂製':' · 尚未排入原板'}</p></article>`).join('');
+  $('tank-parts').innerHTML=r.parts.map(part=>`<article class="tank-part"><div class="tank-part-head"><h3>${esc(part.id+' · '+part.name)}</h3><span>${part.quantity} ${part.kind==='formed'?'只':'片'}</span></div><p class="tank-cut-size">${part.kind==='formed'?'內徑 '+fmt(r.di)+' · t'+fmt(part.thickness)+' mm':part.kind==='circle'?'先下料 Ø '+fmt(part.blankDiameter,2)+' × t'+fmt(part.thickness)+' mm':'先下料 '+fmt(part.width,2)+' × '+fmt(part.height,2)+' × t'+fmt(part.thickness)+' mm'}</p><p>${part.kind==='rectangle'?`修邊後 ${fmt(part.finishedWidth,2)} × ${fmt(part.finishedHeight,2)} mm · ${r.courses} 圈，每圈 ${r.panelsPerCourse} 片`:['sector','petal'].includes(part.kind)?'毛坯以矩形包絡估料；展開與分片見「製作工法」。':part.finishedDiameter?'成品圓徑 '+fmt(part.finishedDiameter,2)+' mm':`封頭深度約 ${fmt(r.headDepth)} mm · 直邊 ${fmt(r.input.headStraight)} mm${part.weightEstimated?' · 重量按曲面概算':''}`}</p><p>成品估重 ${fmt(part.netWeight)} kg${part.sheetIDs.length?' · 排在原板 #'+part.sheetIDs.slice(0,8).join('、#')+(part.sheetIDs.length>8?'…':''):part.kind==='formed'?' · 向封頭廠商訂製':' · 尚未排入原板'}</p></article>`).join('');
   renderAssembly();
   $('tank-assumptions').innerHTML='<ul>'+r.notes.map(note=>'<li>'+esc(note)+'</li>').join('')+'</ul>';
   $('tank-rolling').innerHTML=`<ol class="tank-rolling-list"><li>板厚中面周長：π ×（${fmt(r.di)}＋${fmt(r.input.shellThickness)}）= <b>${fmt(r.circumference,2)} mm</b>。</li><li>每圈 ${r.panelsPerCourse} 片；縱向接縫各留 ${fmt(r.input.gap)} mm，修邊後每片長 <b>${fmt(s.finishedWidth,2)} mm</b>。</li><li>分 ${r.courses} 圈；圈間接縫共 ${fmt((r.courses-1)*r.input.gap)} mm，修邊後每片高 <b>${fmt(s.finishedHeight,2)} mm</b>。</li><li>各邊留 ${fmt(r.input.trim)} mm：先下料 <b>${fmt(s.width,2)} × ${fmt(s.height,2)} mm</b>。預彎、夾持與焊接收縮餘量依機台與工法另確認。</li><li>筒身共有 ${r.verticalSeams} 道縱縫、${r.horizontalSeams} 道環縫，接縫中心線總長約 ${fmt(r.weldLength/1000,2)} m（底蓋／封頭與附件另計）。接縫錯位、坡口與間隙依圖說及 WPS。</li></ol>${[r.endTypes.top,r.endTypes.bottom].some(t=>BUTT_ENDS.includes(t))?'<p class="tank-note">筒身高度已扣除對接端部的直邊及端部對接間隙。封頭毛坯由供應商確認；不把曲面面積當成下料圓徑。</p>':''}`;
   renderStatus(p);
-  if(r.nozzlePlan.valid)try{localStorage.setItem(key,tankProject(projectInput(p,r)));}catch{/* Storage is optional. */}
+  if(r.nozzlePlan.valid&&r.fabrication?.valid!==false)projectDraft.write(tankProject(projectInput(p,r)));else projectDraft.pending('管嘴或工法資料待修正，目前修改尚未保存');
   if(viewer){viewer.update(r);viewer.setSelected(nozzleHighlighted?null:selectedPiece);viewer.setNozzleSelected(nozzleHighlighted);viewer.setTransparent(transparent);viewer.setActive(view==='3d');}
 }
 async function setView(next){
@@ -174,8 +176,8 @@ $('tank-transparent').addEventListener('click',()=>{transparent=!transparent;vie
 $('tank-preview').addEventListener('click',()=>{try{order=tankWorkOrder(result);$('tank-print-frame').srcdoc=order;$('tank-print-preview').showModal();}catch(error){toast(error.message);}});$('tank-close-preview').addEventListener('click',()=>$('tank-print-preview').close());
 $('tank-download-order').addEventListener('click',()=>download(order,'text/html;charset=utf-8','桶槽估料單.html'));$('tank-print-order').addEventListener('click',()=>{const frame=$('tank-print-frame');frame.contentWindow.focus();frame.contentWindow.print();});
 $('tank-csv').addEventListener('click',()=>{try{download(tankCSV(result),'text/csv;charset=utf-8','桶槽估料.csv');}catch(error){toast(error.message);}});
-$('tank-save').addEventListener('click',()=>{if(!result.valid||!result.nozzlePlan.valid){toast('先修正尺寸與管嘴資料，再儲存專案。');return;}download(tankProject(projectInput(input(),result)),'application/json','桶槽專案.json');});
+$('tank-save').addEventListener('click',()=>{if(!result.valid||!result.nozzlePlan.valid||result.fabrication?.valid===false){toast('先修正尺寸、管嘴與工法資料，再儲存專案。');return;}download(tankProject(projectInput(input(),result)),'application/json','桶槽專案.json');});
 $('tank-load').addEventListener('click',()=>$('tank-file').click());$('tank-file').addEventListener('change',async event=>{const file=event.target.files[0];if(!file)return;try{if(file.size>100000)throw new Error('專案檔過大。');apply(readTankProject(await file.text()));render();toast('桶槽專案已載入。');}catch(error){toast(error.message);}finally{event.target.value='';}});
 $('tank-code-sources').innerHTML=CODE_SOURCES.map(source=>`<a href="${esc(source.url)}" target="_blank" rel="noopener">${esc(source.label)} ↗</a>`).join('');
-try{const saved=localStorage.getItem(key);if(saved){apply(readTankProject(saved));$('tank-project-status').textContent='已還原上次桶槽尺寸。';}}catch{/* A damaged or older project must not prevent startup. */}
+try{const saved=localStorage.getItem(key);if(saved){apply(readTankProject(saved));$('tank-project-status').textContent='已還原上次桶槽尺寸。';}}catch{projectDraft.protectSaved();}
 render();

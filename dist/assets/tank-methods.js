@@ -33,6 +33,7 @@ function endCard(r,which){
     card.metrics.unshift(metric('展開外半徑',fmt(dev.rhoOut,1),'mm'),metric('展開角',fmt(dev.theta,2),'°'),metric('深度',fmt(end.depth,0),'mm'));
     if(strain!==null){card.metrics.push(metric('小端成形率',fmt(strain,2),'%',{alert:strain>5}));if(strain>5)card.warnings.push({level:'warn',text:`錐體小端成形率 ${fmt(strain,1)}% > 5%，依材料與規範確認是否需熱處理或熱捲`});}
     if(end.angle<9.5&&which==='top'&&r.orientation==='vertical')card.notes.push('自支撐錐頂常用斜度約 9.5°～37°（API 650）；低於此值多為有支撐的錐頂，需另設樑架。');
+    if(end.small>0)card.warnings.push({level:'info',text:`小端 Ø${fmt(end.small,0)} mm 是開口；小端封口、對接管與轉接件尚需另作配置，不能當成實心錐板穿入管嘴。`});
     card.notes.push('錐板以中面展開；捲錐需錐捲機或分段壓製，小端板邊注意捲板機最小捲徑。');
     return card;
   }
@@ -98,7 +99,7 @@ export function methodCatalog(r){
     cards.push({id:'welding',title:'焊接',glyph:'weld',stages:['weld','inspect'],groups:['welding'],visual:'welding',summary:`${fmt(w.totals.length/1000,1)} m · 焊材約 ${fmt(w.totals.consumable,0)} kg`,metrics:[metric('焊縫總長',fmt(w.totals.length/1000,1),'m'),metric('熔敷金屬',fmt(w.totals.metal,1),'kg'),metric('焊材',fmt(w.totals.consumable,1),'kg'),metric('坡口型式',String(w.grooves.length),'種',{quiet:true})],warnings:[],bom:w.byProcess.map(x=>({name:x.label,spec:`熔敷 ${fmt(x.metal,1)} kg`,qty:1,unit:'批',each:x.consumable,weight:x.consumable})),
       notes:['焊材 = 熔敷金屬 ÷ 焊材效率（廠商指南常見值：SMAW 約 60–65%、GMAW 約 92–98%、FCAW 約 80–90%、SAW 約 99%）。',w.flux?`SAW 焊劑約 ${fmt(w.flux,0)} kg（約 1 kg／kg 熔敷，依電壓與回收）。`:'','坡口依板厚自動選 I／單邊 V／X 形，可在下方改門檻；正式坡口依 WPS。'].filter(Boolean)});
     const hc=heat.cycle,heatCard={id:'heat',title:'預熱／焊後熱處理',glyph:'heat',stages:['weld','inspect'],groups:['heat'],visual:'heat',warnings:heat.warnings.map(text=>({level:'warn',text})),bom:[],notes:[heat.reason,...heat.notes]};
-    heatCard.summary=heat.perform?`PWHT ${fmt(hc.hold,0)} °C × ${fmt(hc.holdHours*60,0)} 分 · ${{furnace:'整體入爐',sections:'分段入爐',local:'局部加熱'}[m.heat.method]}`:heat.need===false?`不需 PWHT · 最厚板 ${fmt(heat.t)} mm`:'依 WPS 判定';
+    heatCard.summary=heat.perform?`PWHT 方案試算 ${fmt(hc.hold,0)} °C × ${fmt(hc.holdHours*60,0)} 分 · ${{furnace:'整體入爐',sections:'分段入爐',local:'局部加熱'}[m.heat.method]}`:heat.need===false?`厚度條件未觸發 PWHT · 最厚板 ${fmt(heat.t)} mm`:'PWHT 條件待確認';
     heatCard.metrics=[...(hc?[metric('最厚板',fmt(heat.t),'mm'),metric('持溫',fmt(hc.holdHours*60,0),'min'),metric('升溫上限',fmt(hc.heatRate,0),'°C/h'),metric('降溫上限',fmt(hc.coolRate,0),'°C/h'),metric('425 °C 以上',fmt(hc.controlled,1),'h',{quiet:true})]:[]),...(m.heat.preheat>0?[metric('預熱',fmt(m.heat.preheat,0),'°C')]:[])];
     if(heat.furnace?.given&&heat.furnace.heats>1)heatCard.metrics.push(metric('入爐次數',String(heat.furnace.heats),'次'));
     if(m.heat.material==='other'&&m.heat.pwht==='auto')heatCard.warnings.push({level:'info',text:'其他材質：請依 WPS 決定是否 PWHT，再把「焊後熱處理」改為要做或不做'});
@@ -115,7 +116,15 @@ export function methodCatalog(r){
     cards.push({id:'erection',title:'吊運安裝',glyph:'ship',stages:['ship'],groups:['erection'],visual:'erection',summary:er.method==='shop'?`空重 ${fmt(er.envelope.weight/1000,2)} t · ${er.transport?.fits?'可整槽運送':'超出可運尺寸'}`:er.jacks?`倒裝 · 頂升機 ${er.jacks.count} 台`:er.air?`充氣頂升 ${fmt(er.air.pressure,2)} kPa`:'正裝法逐圈吊裝',
       metrics:[metric('空槽重',fmt(er.envelope.weight/1000,2),'t'),metric('重心',fmt(cg.empty.y,0),'mm',{note:cg.axis}),metric('最重單片',fmt(er.maxPiece,0),'kg',{quiet:true})],warnings:er.warnings.map(text=>({level:'warn',text})),bom:[],notes:[`重心${cg.axis} ${fmt(cg.empty.y,0)} mm（空槽）／${fmt(cg.operating.y,0)} mm（操作）。`,er.notes??''].filter(Boolean)});
   }
-  for(const card of cards){card.status=card.warnings.some(w=>w.level==='error')?'error':card.warnings.some(w=>w.level==='warn')?'warn':card.optional&&!card.active?'off':'ok';}
+  for(const card of cards){
+    if(['heat','inspection'].includes(card.id)){
+      card.reference=true;
+      const missing=[p.code==='unknown'?'指定規範':'',!String(p.edition??'').trim()?'合約版次':'',!String(p.material??'').trim()?'正式材料規格':''].filter(Boolean);
+      card.warnings.push({level:'info',text:'本頁為規範條件參考與數量估算，未完成工程審核。'+(missing.length?'尚待提供：'+missing.join('、')+'。':''),action:'codes'});
+      card.notes.unshift('規範條文目前未依輸入版次切換規則；版次、適用範圍、材料與 WPS 須另行核對。');
+    }
+    if(['supports','lifting'].includes(card.id)&&card.active){card.reference=true;card.notes.unshift('只估靜力荷重分配，尚未核對重心偏載、支座／吊耳強度、局部應力與施工吊裝程序。');}
+    card.status=card.warnings.some(w=>w.level==='error')?'error':card.warnings.some(w=>w.level==='warn')?'warn':card.optional&&!card.active?'off':card.reference?'reference':'ok';}
   return cards;
 }
 /** Overview strip: one number per fabrication stage. */
