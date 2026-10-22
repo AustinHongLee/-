@@ -2,7 +2,7 @@
 // Every returned route independently closes both fixed face centres and axes.
 import {computeOffset,elbowCutStations} from './offset-geometry.js';
 import {cross} from './offset-ports.js';
-import {installRouteComponents,componentSlot,componentMinimum} from './offset-components.js';
+import {installRouteComponents,validateComponents,componentSlot,componentMinimum} from './offset-components.js';
 const rad=n=>n*Math.PI/180,deg=n=>n*180/Math.PI;
 const add=(a,b)=>a.map((v,i)=>v+b[i]),sub=(a,b)=>a.map((v,i)=>v-b[i]),mul=(a,k)=>a.map(v=>v*k),dot=(a,b)=>a.reduce((s,v,i)=>s+v*b[i],0),norm=a=>Math.hypot(...a),unit=a=>mul(a,1/norm(a)),clamp=x=>Math.max(-1,Math.min(1,x));
 const frameNormal=(u,v)=>unit(sub(v,mul(u,clamp(dot(u,v)))));
@@ -59,11 +59,11 @@ function partsPattern(dirs,stocks,lead,tail){
   return parts;
 }
 function gapFor(left,right,p){
-  if(!left)return {amount:p.aPortGap,source:'既有 A 管口（G1）',direction:right.type==='pipe'?right.direction:right.u};
-  if(!right)return {amount:p.bPortGap,source:'既有 B 管口（G4）',direction:left.type==='pipe'?left.direction:left.v};
-  if(left.type==='elbow'&&left.index===0&&right.type==='pipe')return {amount:p.aGap,source:'首彎頭到直管（G2）',direction:right.direction};
-  if(left.type==='pipe'&&right.type==='elbow'&&right.retain==='outlet')return {amount:p.bGap,source:'直管到末彎頭（G3）',direction:left.direction};
-  return {amount:p.planExtraGap,source:'新增焊口間隙',direction:left.type==='pipe'?left.direction:left.v};
+  if(!left)return {amount:p.aPortGap,gapField:'aPortGap',source:'既有 A 管口（G1）',direction:right.type==='pipe'?right.direction:right.u};
+  if(!right)return {amount:p.bPortGap,gapField:'bPortGap',source:'既有 B 管口（G4）',direction:left.type==='pipe'?left.direction:left.v};
+  if(left.type==='elbow'&&left.index===0&&right.type==='pipe')return {amount:p.aGap,gapField:'aGap',source:'首彎頭到直管（G2）',direction:right.direction};
+  if(left.type==='pipe'&&right.type==='elbow'&&right.retain==='outlet')return {amount:p.bGap,gapField:'bGap',source:'直管到末彎頭（G3）',direction:left.direction};
+  return {amount:p.planExtraGap,gapField:'planExtraGap',source:'新增焊口間隙',direction:left.type==='pipe'?left.direction:left.v};
 }
 function routeFromParts(context,parts,lengths,original=false){
   const p=context.params,joints=Array.from({length:parts.length+1},(_,i)=>gapFor(parts[i-1],parts[i],p));
@@ -122,6 +122,29 @@ export function originalRoutePlan(result){
   const context=result.context,stocks=stockFor(context,2,{},true),parts=partsPattern([context.axes.a,result.direction,context.axes.b],stocks,false,false);
   const plan=parts?routeFromParts(context,parts,[result.cutLength],true):null;
   return plan?installRouteComponents({...plan,id:'original'}):null;
+}
+
+// The original workbench labels its two elbows A/B. Keep the interactive view,
+// saved joint evidence, home status and original-route work order on one identity.
+export function originalWorkbenchPlan(result){
+  const plan=originalRoutePlan(result);if(!plan?.valid)return plan;
+  const elements=plan.elements.map(e=>e.type==='elbow'?{...e,id:e.index===0?'A':'B',end:e.index===0?'A':'B'}:e);
+  return {...plan,elements,elbows:elements.filter(e=>e.type==='elbow')};
+}
+
+// Reuse the selected fittings and directions while reallocating straight lengths
+// for changed gaps. The same closure, stock, minimum-length and component checks apply.
+export function refitRouteGaps(plan,raw){
+  const result=computeOffset(raw);if(!plan?.valid||!result.context)return null;
+  const p=result.params;
+  if(validateComponents(p.components).length)return null;
+  const editable=new Set(['aPortGap','aGap','bGap','bPortGap','planExtraGap','trimA','trimB']),withoutGaps=items=>items.map(({leftGap,rightGap,...part})=>part);
+  if(Object.keys(p).some(k=>k!=='components'&&!editable.has(k)&&JSON.stringify(p[k])!==JSON.stringify(plan.params[k]))||JSON.stringify(withoutGaps(p.components))!==JSON.stringify(withoutGaps(plan.params.components)))return null;
+  if(plan.original)return originalWorkbenchPlan(result);
+  if(['aPortGap','aGap','bGap','bPortGap','planExtraGap'].some(k=>typeof p[k]!=='number'||!Number.isFinite(p[k])||p[k]<0||p[k]>1e6))return null;
+  const base=plan.basePlan??plan,elbows=base.elbows,dirs=[elbows[0].u,...elbows.map(e=>e.v)],stocks=elbows.map(e=>({...e,farTangent:e.trimFar??0})),minimum=Math.max(p.minStraight,p.planMinPipe,1e-4);
+  const next=tryRoute(result.context,dirs,stocks,base.elements[0].type==='pipe',base.elements.at(-1).type==='pipe',minimum);
+  const fitted=next&&installRouteComponents(next,p.components,minimum);return fitted?.valid?{...fitted,id:plan.id}:null;
 }
 
 export function compareRoutePlans(raw){

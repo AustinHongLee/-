@@ -1,0 +1,27 @@
+.input-scene-navigation{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap}.input-scene-mode{display:flex;gap:4px;padding:4px;border:1px solid #dce7df;border-radius:11px;background:#eef4ef;width:max-content}
+.input-scene-mode button{min-height:38px;padding:7px 16px;border:0;background:transparent;color:#789087;border-radius:8px;font-size:12px;box-shadow:none}
+.input-scene-mode button[aria-pressed=true]{background:#fff;color:#256c64;box-shadow:0 2px 6px #245b3810;font-weight:600}
+.offset-page .port-scene-card .scene-view-tabs{background:none;border:0;padding:0;gap:5px}
+.offset-page .port-scene-card .scene-view-tabs button{padding:6px 12px;border:1px solid transparent;min-height:36px;font-size:12px;border-radius:8px}
+.offset-page .port-scene-card .scene-view-tabs button[aria-pressed=true]{border-color:#bdcfc3;background:#f0f6ef;box-shadow:none;color:#367361}
+.input-model-shell{position:relative;margin:10px -8px 0;border:1px solid #e0e9e1;border-radius:14px;background:radial-gradient(ellipse at 48% 40%,#fff 0%,#f0f5f0 100%);overflow:hidden}
+.input-model{height:350px;position:relative;isolation:isolate;overflow:hidden}
+.input-model canvas{display:block;width:100%;height:100%;touch-action:none;cursor:grab;outline:none}
+.input-model canvas:active{cursor:grabbing}.input-model canvas:focus-visible{outline:2px solid #348e7e;outline-offset:-3px}
+.input-model-caption{position:absolute;z-index:3;top:13px;left:14px;font-size:10px;letter-spacing:.04em;color:#6c8577;pointer-events:none}
+.input-model-scale{position:absolute;z-index:3;bottom:10px;right:13px;font-size:9px;color:#879c8f;pointer-events:none}
+.input-model-labels{position:absolute;inset:0;pointer-events:none;overflow:hidden}
+.input-model-compass{position:absolute;bottom:2px;left:2px;width:78px;height:68px;pointer-events:none;font-family:'Segoe UI',sans-serif;font-size:11px;font-weight:600}
+.input-model-labels>svg{position:absolute;inset:0;width:100%;height:100%;overflow:hidden;pointer-events:none;opacity:.5;stroke-width:1}
+.offset-page .input-model-tag{position:absolute;left:0;top:0;pointer-events:auto;display:flex;align-items:center;justify-content:center;min-height:32px;padding:0;border:0;border-radius:8px;background:transparent;box-shadow:none;color:var(--tag-color);font-size:11px;font-weight:600;white-space:nowrap;line-height:20px}
+.input-model-tag>span{display:block;padding:4px 8px;border:1px solid color-mix(in srgb,var(--tag-color) 35%,white);border-radius:8px;background:#fffffff2;box-shadow:0 2px 6px #3158400a}
+.offset-page .input-model-tag.port{font-size:13px}.input-model-tag.port>span{padding:4px 11px;border-radius:20px}
+.offset-page .input-model-tag.joint[aria-pressed=true]>span{background:#fff2d9;border-color:#c18b38;color:#92601f;box-shadow:0 0 0 3px #e3ba7322}
+.offset-page .input-model-tag:focus-visible{outline:2px solid #328576;outline-offset:2px}
+.input-model-tools{display:flex;align-items:center;gap:6px;margin:10px 0 12px}
+.input-model-tools>span{font-size:10px;color:#839a8b;margin-right:auto}
+.offset-page .input-model-tools button{display:flex;align-items:center;justify-content:center;gap:5px;min-height:38px;min-width:38px;padding:7px 9px;border:1px solid #dce6de;border-radius:9px;background:#fff;color:#517a68;box-shadow:none;font-size:11px}
+.input-model-tools .ui-icon{width:16px;height:16px}
+.input-model-status{font-size:11px;color:#8f794d;padding:9px 12px;background:#fcf7ed;border-radius:8px;line-height:1.6}
+.offset-page .port-sketch[hidden],.input-model-shell[hidden],.input-model-tools[hidden],.input-model-tag[hidden],.input-model-status[hidden]{display:none}
+@media(max-width:720px){.input-model{height:295px}.input-model-shell{margin-left:-8px;margin-right:-8px}.input-scene-mode button,.offset-page .port-scene-card .scene-view-tabs button{min-height:44px}.offset-page .input-model-tools button{min-width:44px;min-height:44px}.input-model-tools>span{font-size:9px}.input-model-caption{top:11px;left:11px;font-size:9px}.offset-page .input-model-tag{min-height:44px;min-width:44px;font-size:10px}.offset-page .input-model-tag.port{font-size:12px}.input-model-tools{margin-top:8px}}

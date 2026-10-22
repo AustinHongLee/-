@@ -170,7 +170,7 @@ export const METHOD_SPECS=Object.freeze({
   }},
   inspection:{label:'檢驗試驗',fields:{
     standard:pick('auto',{auto:'依指定規範',api650:'API 650',asme:'ASME VIII-1',none:'只記錄量測方法'},'公差依據'),
-    rt:pick('auto',{auto:'依接頭效率／規範',full:'全部 RT',spot:'抽查 RT',none:'不做 RT'},'射線檢驗'),
+    rt:pick('auto',{auto:'依接頭效率／規範',full:'全部 RT',spot:'抽查 RT',drawing:'依圖說記錄（範圍待確認）',none:'不做 RT'},'射線檢驗'),
     hydro:flag(true,'水壓／盛水試驗'),
     testFill:num(100,10,100,'試驗盛水比例 %',{when:g=>g.hydro}),
     pumpRate:num(20,1,2000,'灌水量 m³/h',{when:g=>g.hydro}),

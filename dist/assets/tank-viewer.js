@@ -1,7 +1,12 @@
+import {shellRingStations} from './tank-shell-layout.js';
 import * as THREE from 'three';
 import {OrbitControls} from 'three/addons/controls/OrbitControls.js';
 import {pieceColor} from './tank-visuals.js';
 import {outerProfile} from './tank-heads.js';
+import {addV1102Support} from './tank-reference-support.js';
+import {tankDrawingModel} from './tank-drawing-model.js';
+import {TankSceneLabels} from './tank-scene-labels.js';
+import {addShellSeamOverlays} from './tank-seam-webgl.js';
 const rad=d=>d*Math.PI/180;
 // Helix around the tank axis in the tank frame (y = axis).
 class Helix extends THREE.Curve{constructor(radius,y0,y1,a0,sweep){super();Object.assign(this,{radius,y0,y1,a0,sweep});}getPoint(t,target=new THREE.Vector3()){const a=rad(this.a0+this.sweep*t);return target.set(this.radius*Math.sin(a),this.y0+(this.y1-this.y0)*t,this.radius*Math.cos(a));}}
@@ -9,22 +14,37 @@ export class TankViewer{
   constructor(host,onSelect=()=>{},onNozzle=()=>{}){
     this.host=host;this.scene=new THREE.Scene();this.scene.background=new THREE.Color('#eef4f7');this.camera=new THREE.PerspectiveCamera(40,1,.1,1e7);this.renderer=new THREE.WebGLRenderer({antialias:true});this.renderer.setPixelRatio(Math.min(devicePixelRatio,2));host.replaceChildren(this.renderer.domElement);
     this.controls=new OrbitControls(this.camera,this.renderer.domElement);this.controls.enableDamping=true;this.controls.autoRotateSpeed=.8;
+    this.labels=new TankSceneLabels(host,THREE);
     this.scene.add(new THREE.HemisphereLight(0xffffff,0x687e8a,2.5));const light=new THREE.DirectionalLight(0xffffff,2);light.position.set(1,3,4);this.scene.add(light);this.group=new THREE.Group();
     // Plan angles run CLOCKWISE seen from above (plan view, A4, CSV). The estimate's (sinθ, y, cosθ) mapping and
     // CylinderGeometry run counter-clockwise in three.js (y up), so mirror z once here; data coordinates stay unchanged.
     this.group.scale.z=-1;this.scene.add(this.group);
     this.observer=new ResizeObserver(()=>this.resize());this.observer.observe(host);this.resize();this.setActive(true);
-    this.raycaster=new THREE.Raycaster();let down=null;this.renderer.domElement.addEventListener('pointerdown',event=>{down={x:event.clientX,y:event.clientY};});this.renderer.domElement.addEventListener('pointerup',event=>{const start=down;down=null;if(!start||Math.hypot(event.clientX-start.x,event.clientY-start.y)>6)return;const box=this.renderer.domElement.getBoundingClientRect();this.raycaster.setFromCamera(new THREE.Vector2((event.clientX-box.left)/box.width*2-1,-(event.clientY-box.top)/box.height*2+1),this.camera);const hit=this.raycaster.intersectObjects(this.group.children.filter(item=>item.isMesh))[0];if(hit?.object.userData.nozzleId)onNozzle(hit.object.userData.nozzleId);else if(hit?.object.userData.pieceId)onSelect(hit.object.userData.pieceId);});this.renderer.domElement.addEventListener('pointercancel',()=>{down=null;});
+    this.raycaster=new THREE.Raycaster();let down=null;this.renderer.domElement.addEventListener('pointerdown',event=>{down={x:event.clientX,y:event.clientY};});this.renderer.domElement.addEventListener('pointerup',event=>{const start=down;down=null;if(!start||Math.hypot(event.clientX-start.x,event.clientY-start.y)>6)return;const box=this.renderer.domElement.getBoundingClientRect();this.raycaster.setFromCamera(new THREE.Vector2((event.clientX-box.left)/box.width*2-1,-(event.clientY-box.top)/box.height*2+1),this.camera);const hit=this.raycaster.intersectObjects(this.group.children.filter(item=>item.isMesh&&!item.userData.clearanceOverlay))[0];if(hit?.object.userData.nozzleId)onNozzle(hit.object.userData.nozzleId);else if(hit?.object.userData.pieceId)onSelect(hit.object.userData.pieceId);});this.renderer.domElement.addEventListener('pointercancel',()=>{down=null;});
   }
   resize(){const {width,height}=this.host.getBoundingClientRect();if(!width||!height)return;this.renderer.setSize(width,height);this.camera.aspect=width/height;this.camera.updateProjectionMatrix();}
-  setActive(active){this.controls.enabled=active;let previous=null;this.renderer.setAnimationLoop(active?time=>{const dt=previous===null?0:Math.min((time-previous)/1000,.05);previous=time;this.controls.update(dt);this.renderer.render(this.scene,this.camera);}:null);}
+  setActive(active){this.controls.enabled=active;let previous=null;this.renderer.setAnimationLoop(active?time=>{const dt=previous===null?0:Math.min((time-previous)/1000,.05);previous=time;this.controls.update(dt);this.renderer.render(this.scene,this.camera);this.labels.render(this.camera,this.group);}:null);}
   setSpin(value){this.controls.autoRotate=value;}
+  setLabelsVisible(value){this.labels.root.hidden=!value;}
   setTransparent(value){for(const item of this.group.children)if(item.isMesh){item.material.transparent=value;item.material.opacity=value?.48:1;item.material.depthWrite=!value;}}
-  setSelected(id){this.selected=id;for(const item of this.group.children)if(item.userData.pieceId){item.material.color.set(item.userData.pieceId===id?'#efbd65':item.userData.color);}}
-  setNozzleSelected(id){this.selectedNozzle=id;for(const item of this.group.children)if(item.userData.nozzleId)item.material.color.set(item.userData.nozzleId===id?'#e6ad51':item.userData.color);}
-  reset(){const r=this.result;if(!r)return;const bounds=new THREE.Box3().setFromObject(this.group),center=bounds.getCenter(new THREE.Vector3()),dimensions=bounds.getSize(new THREE.Vector3()),size=Math.max(dimensions.x,dimensions.y,dimensions.z,1);this.controls.target.copy(center);this.camera.position.copy(center).add(new THREE.Vector3(size*1.4,size*.8,size*1.6));this.camera.near=Math.max(.01,size/10000);this.camera.far=size*100;this.camera.updateProjectionMatrix();this.controls.minDistance=size*.25;this.controls.maxDistance=size*10;this.controls.update();}
-  update(r){
-    this.result=r;while(this.group.children.length){const item=this.group.children[0];this.group.remove(item);item.geometry?.dispose();item.material?.dispose();}
+  setSelected(id){this.selected=id;for(const item of this.group.children)if(item.userData.pieceId){item.material.color.set(item.userData.layoutInvalid?item.userData.color:(item.userData.pieceId===id||item.userData.bomId===id)?'#efbd65':item.userData.color);}}
+  setNozzleSelected(id){this.selectedNozzle=id;for(const item of this.group.children)if(item.userData.nozzleId)item.material.color.set(item.userData.clearanceOverlay?item.userData.color:item.userData.nozzleId===id?'#e6ad51':item.userData.color);}
+  selectDrawing(id){
+    const w=this.drawing?.support?.zones.find(w=>w.id===id),p=this.drawing?.support?.parts.find(p=>p.id===id||p.bomId===id),anchor=w?.anchor??p?.anchor;
+    if(anchor&&!this.activeLabels.some(l=>l.id===id))this.labels.update([...this.activeLabels,{id,kind:w?'weld':'part',text:id+(w?' · 接合區':' · BOM對應'),anchor}],this.drawing.revision);
+    this.labels.select(id);for(const o of this.group.children)if(o.userData.weldId)o.material.color.set(o.userData.weldId===id?'#d34e21':o.userData.color??'#b97622');this.setSelected(id);
+  }
+  reset(){const r=this.result;if(!r)return;const bounds=new THREE.Box3();this.group.updateWorldMatrix(true,true);for(const item of this.group.children)if(item.visible)bounds.expandByObject(item);const center=bounds.getCenter(new THREE.Vector3()),dimensions=bounds.getSize(new THREE.Vector3()),size=Math.max(dimensions.x,dimensions.y,dimensions.z,1);this.controls.target.copy(center);
+    const direction=new THREE.Vector3(1.4,.8,1.6).normalize(),right=new THREE.Vector3().crossVectors(this.camera.up,direction).normalize(),up=new THREE.Vector3().crossVectors(direction,right),tanV=Math.tan(this.camera.fov*Math.PI/360),tanH=tanV*this.camera.aspect;let distance=0;
+    for(const x of [bounds.min.x,bounds.max.x])for(const y of [bounds.min.y,bounds.max.y])for(const z of [bounds.min.z,bounds.max.z]){const v=new THREE.Vector3(x,y,z).sub(center),depth=v.dot(direction);distance=Math.max(distance,depth+Math.abs(v.dot(right))/tanH,depth+Math.abs(v.dot(up))/tanV);}this.camera.position.copy(center).addScaledVector(direction,distance*1.15);this.camera.near=Math.max(.01,size/10000);this.camera.far=size*100;this.camera.updateProjectionMatrix();this.controls.minDistance=size*.25;this.controls.maxDistance=size*10;this.controls.update();}
+  setSupportFocus(value){
+    if(!this.drawing?.support)return;
+    for(const item of this.group.children)item.visible=!value||Boolean(item.userData.support||item.userData.bomId?.startsWith(this.drawing.support.id+'.'));
+    const labels=value?[...this.drawing.support.parts.filter(p=>p.kind!=='contact-zone').map(p=>({id:p.id,kind:'part',text:p.id+(p.kind==='profile-zone'?' · 輪廓待核':''),anchor:p.anchor})),...this.drawing.support.zones.filter(w=>['W1','W5'].includes(w.localId)).map(w=>({id:w.id,kind:'weld',text:w.id+' · '+(w.size??'待核')+' / '+(w.size??'待核')+' 全周',anchor:w.anchor}))]:this.sceneLabels;
+    this.activeLabels=labels;this.labels.update(labels,this.drawing.revision);this.reset();
+  }
+  update(r,{preserveCamera=false}={}){
+    const first=!this.result;this.result=r;while(this.group.children.length){const item=this.group.children[0];this.group.remove(item);item.geometry?.dispose();item.material?.dispose();}
     const p=r.input,f=r.frame,rad0=r.di/2,vertical=r.orientation!=='horizontal';
     // Vertical: mirror z so plan angles run clockwise from above. Horizontal: tank axis → world x, angle 0° → up,
     // clockwise when seen from the A end (world = (local y, local z, local x)).
@@ -33,10 +53,10 @@ export class TankViewer{
     const mesh=(geometry,y=0,color='#84b0c5')=>{const m=new THREE.Mesh(geometry,new THREE.MeshStandardMaterial({color,metalness:.35,roughness:.45,side:THREE.DoubleSide}));m.position.y=y;this.group.add(m);return m;};
     const bodyBottom=f.bodyBottom,outer=rad0+p.shellThickness;
     // Bound rendering complexity; the full piece list remains in the estimate and CSV.
-    if(r.assembly.length<=500){for(const piece of r.assembly){const angle=piece.start/r.circumference*Math.PI*2,span=piece.length/r.circumference*Math.PI*2,color=pieceColor(piece.id),m=mesh(new THREE.CylinderGeometry(outer,outer,piece.height,Math.max(4,Math.ceil(span/Math.PI*36)),1,true,angle,span),bodyBottom+piece.z+piece.height/2,color);m.userData={pieceId:piece.id,color};
+    if(r.assembly.length<=500){for(const piece of r.assembly){const angle=piece.start/r.circumference*Math.PI*2,span=piece.length/r.circumference*Math.PI*2,layoutInvalid=r.shellLayoutState?.invalidPieces?.includes(piece.id),color=layoutInvalid?'#cf6250':pieceColor(piece.id),m=mesh(new THREE.CylinderGeometry(outer,outer,piece.height,Math.max(4,Math.ceil(span/Math.PI*36)),1,true,angle,span),bodyBottom+piece.z+piece.height/2,color);m.userData={pieceId:piece.id,color,layoutInvalid};
       const points=[new THREE.Vector3(outer*Math.sin(angle),bodyBottom+piece.z,outer*Math.cos(angle)),new THREE.Vector3(outer*Math.sin(angle),bodyBottom+piece.z+piece.height,outer*Math.cos(angle))];this.group.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(points),new THREE.LineBasicMaterial({color:'#456477'})));
     }}else mesh(new THREE.CylinderGeometry(outer,outer,r.bodyHeight,72,1,true),bodyBottom+r.bodyHeight/2);
-    for(let i=1;i<r.courses;i++){const ring=new THREE.Mesh(new THREE.TorusGeometry(outer+.5,Math.max(r.di/800,1),6,96),new THREE.MeshBasicMaterial({color:'#477f99'}));ring.rotation.x=Math.PI/2;ring.position.y=bodyBottom+i*(r.courseHeight+p.gap)-p.gap/2;this.group.add(ring);}
+    for(const {z} of shellRingStations(r)){const ring=new THREE.Mesh(new THREE.TorusGeometry(outer+.5,Math.max(r.di/800,1),6,96),new THREE.MeshBasicMaterial({color:'#477f99'}));ring.rotation.x=Math.PI/2;ring.position.y=bodyBottom+z;this.group.add(ring);}
     for(const which of ['bottom','top']){
       const end=r.ends[which],sign=which==='bottom'?-1:1,tangent=which==='bottom'?f.bottomTangent:f.topTangent;
       if(end.type==='open')continue;
@@ -48,12 +68,21 @@ export class TankViewer{
     for(const n of r.nozzlePlan?.items??[]){const bad=(n.warnings??[]).some(w=>/相交|碰到|低於|無法|伸到|不一致|超出/.test(w)),direction=new THREE.Vector3(...n.direction),start=new THREE.Vector3(...n.pipeStart),end=new THREE.Vector3(...n.pipeEnd),axis=new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0,1,0),direction),add=(geometry,point,color)=>{const m=mesh(geometry,0,color);m.position.copy(point);m.quaternion.copy(axis);m.userData={nozzleId:n.id,color};return m;},length=start.distanceTo(end),center=start.clone().add(end).multiplyScalar(.5);
       add(new THREE.CylinderGeometry(n.od/2,n.od/2,length,32,1,true),center,bad?'#d0675e':'#739caf');add(new THREE.CylinderGeometry(n.od/2-n.thickness,n.od/2-n.thickness,length,32,1,true),center,'#7892a0');
       if(n.end!=='bare'){const face=new THREE.Vector3(...n.face),shape=new THREE.Shape();shape.absarc(0,0,n.flangeOD/2,0,Math.PI*2,false);const bore=new THREE.Path();bore.absarc(0,0,n.od/2,0,Math.PI*2,true);shape.holes.push(bore);const disk=mesh(new THREE.ExtrudeGeometry(shape,{depth:n.flangeThickness,bevelEnabled:false,curveSegments:32}),0,'#cdb17f');disk.position.copy(face.clone().addScaledVector(direction,-n.flangeThickness));disk.quaternion.setFromUnitVectors(new THREE.Vector3(0,0,1),direction);disk.userData={nozzleId:n.id,color:bad?'#de8f86':'#cdb17f'};if(bad)disk.material.color.set('#de8f86');
-        const neckLength=n.flangeLength-n.flangeThickness;if(neckLength>0)add(new THREE.CylinderGeometry(Math.min(n.flangeOD*.4,n.od*.72),n.od/2,neckLength,32,1,true),face.clone().addScaledVector(direction,-n.flangeThickness-neckLength/2),'#bca577');
-        if(n.kind==='manhole'){const cover=mesh(new THREE.CylinderGeometry(n.flangeOD/2,n.flangeOD/2,n.coverThickness||n.flangeThickness,48),0,'#b99d6d');cover.position.copy(face.clone().addScaledVector(direction,(n.coverThickness||n.flangeThickness)/2+2));cover.quaternion.copy(axis);cover.userData={nozzleId:n.id,color:'#b99d6d'};}}
-      if(n.padRadius>0&&n.host==='shell'){const theta=n.angle*Math.PI/180,half=Math.asin(Math.min(1,n.padRadius/(outer+n.padThickness/2))),pad=mesh(new THREE.CylinderGeometry(outer+n.padThickness/2,outer+n.padThickness/2,2*n.padRadius,24,1,true,theta-half,2*half),bodyBottom+n.height,'#d9c08f');pad.userData={nozzleId:n.id,color:'#d9c08f'};}
+        const neckLength=n.flangeLength-n.flangeThickness;if(neckLength>0){const integral=n.construction==='integral',neckRadius=(n.neckOD||n.od)/2;add(new THREE.CylinderGeometry(integral?neckRadius:Math.min(n.flangeOD*.4,n.od*.72),integral?neckRadius:n.od/2,neckLength,32,1,true),face.clone().addScaledVector(direction,-n.flangeThickness-neckLength/2),'#bca577');}
+        if(n.kind==='manhole'){const cover=mesh(new THREE.CylinderGeometry(n.flangeOD/2,n.flangeOD/2,n.coverThickness||n.flangeThickness,48),0,'#b99d6d');cover.position.copy(face.clone().addScaledVector(direction,(n.coverThickness||n.flangeThickness)/2+2));cover.quaternion.copy(axis);cover.userData={nozzleId:n.id,color:'#b99d6d',referenceOnly:!n.coverThickness};if(!n.coverThickness){cover.material.wireframe=true;cover.material.transparent=true;cover.material.opacity=.3;}}}
+      if(n.padRadius>0&&n.host==='shell'){const theta=n.surfaceAngle*Math.PI/180,half=Math.asin(Math.min(1,n.padRadius/(outer+n.padThickness/2))),pad=mesh(new THREE.CylinderGeometry(outer+n.padThickness/2,outer+n.padThickness/2,2*n.padRadius,24,1,true,theta-half,2*half),bodyBottom+n.height,'#d9c08f');pad.userData={nozzleId:n.id,color:'#d9c08f'};}
     }
+    addShellSeamOverlays(r,THREE,this.group);
     this.attachments(r,mesh);
-    this.setSelected(this.selected);this.setNozzleSelected(this.selectedNozzle);this.reset();
+    addV1102Support(r,THREE,mesh);
+    const drawing=tankDrawingModel(r),located=drawing.welds.filter(w=>w.location==='located'),zones=drawing.welds.filter(w=>w.location==='zone');
+    for(const w of [...located,...zones].slice(0,80)){
+      const paths=w.paths??[w.pointsKind==='line'?[[w.anchor[0],w.station,w.anchor[2]],[w.anchor[0],w.station+w.length,w.anchor[2]]]:Array.from({length:129},(_,i)=>[w.radius*Math.sin(i*Math.PI/64),w.station,w.radius*Math.cos(i*Math.PI/64)])];
+      for(const pts of paths){const line=new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts.map(a=>new THREE.Vector3(...a))),w.location==='zone'?new THREE.LineDashedMaterial({color:'#b97622',dashSize:8,gapSize:6,depthTest:false}):new THREE.LineBasicMaterial({color:'#b97622',depthTest:false}));line.computeLineDistances();line.renderOrder=3;line.userData={weldId:w.id,support: w.location==='zone'};this.group.add(line);}
+    }
+    this.drawing=drawing;this.sceneLabels=[...drawing.plates.slice(0,12).map(p=>({id:p.id,kind:'part',text:p.id+' · '+p.finished.map(v=>Number(v.toFixed(2))).join(' × ')+' mm',anchor:p.anchor})),...drawing.heads.map(h=>({id:h.id,kind:'part',text:h.id+' · 名目 t'+h.thickness,anchor:h.anchor})),...located.slice(0,14).map(w=>({id:w.id,kind:'weld',text:w.id+' · '+Number(w.length.toFixed(2))+' mm',anchor:w.anchor})),...(drawing.support?.parts??[]).filter(p=>p.kind==='base'||p.kind==='rolled').map(p=>({id:p.id,kind:'part',text:p.id+(p.kind==='base'?(p.holePosition==='specified'?' · 孔列已定位':' · 孔列偏置待核'):' · '+p.blank[0]+' / '+p.angle+'°待核'),anchor:p.anchor}))];
+    this.activeLabels=this.sceneLabels;this.labels.update(this.sceneLabels,drawing.revision);
+    this.setSelected(this.selected);this.setNozzleSelected(this.selectedNozzle);if(first||!preserveCamera)this.reset();
   }
   attachments(r,mesh){
     const a=r.attachments;if(!a)return;

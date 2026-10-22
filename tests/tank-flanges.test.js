@@ -15,7 +15,7 @@ test('manufacturer inch reference adds separately drawn RF height exactly once t
 test('SO uses its own hub length; unsupported classes, sizes and faces never substitute a different flange',()=>{
   close(flangeReference(n({end:'so'})).flangeLength,(.94+1/16)*25.4);
   close(flangeReference(n({end:'so',flangeClass:'300'})).flangeLength,(1.25+1/16)*25.4);
-  for(const data of [{flangeClass:'600'},{flangeSize:'8'},{flangeFacing:'FF'},{flangeFacing:'RTJ'},{end:'bare'},{flangeSize:''}]){assert.equal(flangeReference(n(data)),null);assert.equal(applyFlangeReference(n(data)),null);}
+  for(const data of [{flangeClass:'600'},{flangeSize:'14'},{flangeFacing:'FF'},{flangeFacing:'RTJ'},{end:'bare'},{flangeSize:''}]){assert.equal(flangeReference(n(data)),null);assert.equal(applyFlangeReference(n(data)),null);}
 });
 test('applying a reference preserves measured pipe geometry and process data, and clears old flange mass',()=>{
   const original=n({od:60,thickness:4,flangeWeight:8.8,soSetback:3,flangeSpec:'圖說 A'}),applied=applyFlangeReference(original);

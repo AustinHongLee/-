@@ -7,7 +7,7 @@ export function offsetFieldRoute(field,p,{sharedStock=false}={}){
  if(/^[ab]Axis[XYZ]$/.test(key)){
   const end=key[0],bad=['X','Y','Z'].find(k=>!finite(p[end+'Axis'+k])||Math.abs(p[end+'Axis'+k])>1e7);if(bad)key=end+'Axis'+bad;
  }
- const plan=key.startsWith('plan'),stock=key==='od'||stockKeys.some(k=>key==='a'+k||key==='b'+k),gap=/PortGap$|^[ab]Gap$|^trim|^minStraight$|^stations$/.test(key);
+ const plan=key.startsWith('plan'),stock=key==='od'||key==='components'||stockKeys.some(k=>key==='a'+k||key==='b'+k),gap=/PortGap$|^[ab]Gap$|^trim|^minStraight$|^stations$/.test(key);
  return {field:key,stage:plan?2:1,editor:stock?'stock':gap?'gaps':'position',end:/^[ab](Axis|Kind|Donor|Radius|Measured|Factory|Takeout|Tangent)/.test(key)?key[0]:null,graphicalAxis:/^[ab]Axis$/.test(key)&&p[key]!=='custom'};
 }
 function parallelSpace(r){
@@ -25,6 +25,7 @@ export function offsetRecoveryItems(result,{sharedStock=false}={}){
   const route=offsetFieldRoute(error.field,p,{sharedStock}),field=route.field,end=field[0],both=sharedStock&&stockKeys.some(k=>field==='a'+k),label=both?'兩端':route.end?route.end.toUpperCase()+' 端':'',code=error.code??'input',inputError=code==='input',name=names[field]??`${label} ${field.slice(1)}`;
   let title=`核對${name}`,detail=error.message,actionLabel=`前往${name}`,target=route,secondary=[];
   if(['run','roll','rise'].includes(field)&&inputError){title=finite(p[field])?`${name}超出可計算範圍`:`請填${name}`;detail=p.basis==='ports'?'填 A 到 B 的實測距離，反方向用負值；沒有這個方向的偏移請明確填 0。':'填中心線理論交點之間的實測尺寸。';actionLabel=`填${name}`;}
+  else if(field==='components'){title='指定零件需重新核對';detail=error.message;actionLabel='修改零件規格／尺寸';}
   else if(field==='od'){title='先確認管子的實際外徑';detail=`目前 ${fmt(p.od)} mm。可選公稱吋數帶入外徑，或填大於 0 的實測外徑。`;actionLabel='選管徑／填外徑';}
   else if(/Radius$|MeasuredArc$/.test(field)&&!field.startsWith('plan')){
    title=`${label}彎頭半徑還不能使用`;const arc=field.endsWith('MeasuredArc');detail=arc?`請量原件完整${p[end+'RadiusMethod']==='outerArc'?'外背':'內腹'}弧，排除端部直段；反算的 Rc 須大於外徑一半 ${fmt(p.od/2)} mm。`:`外徑 ${fmt(p.od)} mm，中心線 Rc 必須大於 ${fmt(p.od/2)} mm；目前填 ${fmt(p[field])} mm。請核對實物半徑。`;actionLabel=arc?'量／填完整弧長':'核對彎頭 Rc';

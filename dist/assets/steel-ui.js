@@ -37,7 +37,8 @@ function icon(kind){
  * measurements, not a standard catalogue or a structural design selection. */
 export function steelTypeCards(p){
  const selected=p.branchSection??'pipe';
- return `<div class="steel-choice" role="group" aria-label="支材截形"><p class="steel-choice-title">支材截形</p><div class="steel-shape-grid">${TYPES.map(([value,title,subtitle])=>`<button type="button" class="steel-shape-card" data-steel-section="${value}" aria-pressed="${selected===value}">${icon(value)}<strong>${title}</strong><span>${subtitle}</span></button>`).join('')}</div><p class="steel-help">鋼構支材皆為外焊支撐，母管保持封閉。選「管線支管」會改回外貼開孔。圖卡帶入自訂尺寸示例，請按供料修改。</p></div>`;
+ const chosen=TYPES.find(([value])=>value===selected)??TYPES[0];
+ return `<details id="steel-type-picker" class="steel-type-picker"><summary>${icon(selected)}<span><small>支管／支材種類</small><strong>${chosen[1]}</strong></span></summary><div class="steel-choice" role="group" aria-label="支材截形"><p class="steel-choice-title">支材截形</p><div class="steel-shape-grid">${TYPES.map(([value,title,subtitle])=>`<button type="button" class="steel-shape-card" data-steel-section="${value}" aria-pressed="${selected===value}">${icon(value)}<strong>${title}</strong><span>${subtitle}</span></button>`).join('')}</div><p class="steel-help">鋼構支材皆為外焊支撐，母管保持封閉。選「管線支管」會改回外貼開孔。圖卡帶入自訂尺寸示例，請按供料修改。</p></div></details>`;
 }
 
 export function steelChoicePatch(p,value){

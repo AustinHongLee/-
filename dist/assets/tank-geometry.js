@@ -1,10 +1,14 @@
 // Geometry only. Thickness is a supplied estimating value, never a code design result.
 import {endShape,endIssues,END_LABELS,TOP_ENDS,BOTTOM_ENDS,HORIZONTAL_ENDS,BUTT_ENDS,FORMED_ENDS,TORI_PRESETS} from './tank-heads.js';
 import {methodDefaults} from './tank-method-config.js';
+import {FAB_DEFAULT} from './tank-fabrication.js';
+import {PURCHASE_DEFAULT} from './tank-stock-supply.js';
+import {SHELL_RECORD_DEFAULT} from './tank-shell-records.js';
+import {SEAM_CLEARANCE_DEFAULT} from './tank-seam-settings.js';
 const deepFreeze=o=>{if(o&&typeof o==='object'){for(const v of Object.values(o))deepFreeze(v);Object.freeze(o);}return o;};
 export const TANK_DEFAULTS=Object.freeze({shape:'open',solve:'volume',basis:'inside',diameter:1200,height:2000,volume:2.262,shellThickness:6,endThickness:6,density:7850,fill:90,stockWidth:1500,stockLength:6000,shellLayout:'around',seamLayout:'stagger',trim:5,kerf:3,gap:0,overhang:10,headStraight:25,headGap:2,headBlank:0,headWeight:0,
-  orientation:'vertical',top:'flat',bottom:'flat',topThickness:0,topAngle:15,topSmall:0,bottomAngle:60,bottomSmall:100,toriPreset:'asme',toriCrown:1,toriKnuckle:.06,domeRatio:1,seamStart:0,
-  service:'unknown',code:'unknown',edition:'',jurisdiction:'',medium:'',material:'',pressure:'',vacuum:'',temperature:'',minTemperature:'',liquidDensity:'',corrosion:'',efficiency:'',nozzles:Object.freeze([]),methods:deepFreeze(methodDefaults())});
+  orientation:'vertical',top:'flat',bottom:'flat',topThickness:0,topAngle:15,topSmall:0,bottomAngle:60,bottomSmall:100,toriPreset:'asme',toriCrown:1,toriKnuckle:.06,domeRatio:1,seamStart:0,seamClearance:SEAM_CLEARANCE_DEFAULT,shellLayoutPlan:null,referenceCase:'',stockSelections:Object.freeze([]),stockPurchasing:PURCHASE_DEFAULT,
+  service:'unknown',code:'unknown',edition:'',jurisdiction:'',medium:'',material:'',pressure:'',vacuum:'',temperature:'',minTemperature:'',liquidDensity:'',corrosion:'',efficiency:'',nozzles:Object.freeze([]),fabricationData:FAB_DEFAULT,shellConstruction:SHELL_RECORD_DEFAULT,methods:deepFreeze(methodDefaults())});
 export const SHAPES={open:'開口平底槽',flat:'平蓋平底槽',elliptical:'雙 2:1 橢圓封頭',custom:'自訂槽型'};
 export const TOP_NAMES=Object.freeze({open:'開口',flat:'平蓋',cone:'錐頂',dome:'拱頂',elliptical:'橢圓上封頭',torispherical:'碟形上封頭',hemispherical:'半球上封頭'});
 export const BOTTOM_NAMES=Object.freeze({flat:'平底',cone:'錐底',elliptical:'橢圓下封頭',torispherical:'碟形下封頭',hemispherical:'半球下封頭'});

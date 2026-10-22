@@ -1,3 +1,5 @@
+import {shellRingStations} from './tank-shell-layout.js';
+import {stockFor} from './tank-stock-config.js';
 // Attachment fabrication estimates: geometry, cut lists and weights for supports, rings, access, jackets, internals,
 // lifting lugs, reinforcing pads and manhole covers. Loads are plain statics for planning; no strength design is done.
 import {sectorLayout,polygonArea} from './tank-layouts.js';
@@ -25,7 +27,8 @@ export function padOutline(Rp,Rh,rn,steps=72){
 }
 function padPlan(r){
   const p=r.input,rho=p.density,items=[];
-  for(const n of r.nozzlePlan?.items??[]){if(!(n.padRadius>0))continue;
+  for(const n of r.nozzlePlan?.items??[]){if(!(n.padRadius>0)||r.detailedTargets?.has('pad:'+n.id))continue;
+    if(n.host==='shell'&&n.axisMode==='parallel'&&Number(n.offset)!==0)continue; // Do not issue a radial pad template for an oblique intersection.
     const t=n.padThickness,holeR=n.od/2+1.5,shell=n.host==='shell';
     const shape=shell?padOutline(n.padRadius,holeR,r.od/2+t/2):{outer:Array.from({length:73},(_,i)=>[n.padRadius*Math.cos(i/72*2*PI),n.padRadius*Math.sin(i/72*2*PI)]),inner:Array.from({length:73},(_,i)=>[holeR*Math.cos(-i/72*2*PI),holeR*Math.sin(-i/72*2*PI)])};
     const area=polygonArea(shape.outer)-polygonArea(shape.inner),xs=shape.outer.map(q=>q[0]),ys=shape.outer.map(q=>q[1]),w=Math.max(...xs)-Math.min(...xs),h=Math.max(...ys)-Math.min(...ys);
@@ -35,13 +38,14 @@ function padPlan(r){
 }
 function manholePlan(r){
   const p=r.input,rho=p.density;
-  return (r.nozzlePlan?.items??[]).filter(n=>n.kind==='manhole'&&n.end!=='bare').map(n=>{const t=n.coverThickness>0?n.coverThickness:n.flangeThickness,cover=plateKg(PI*n.flangeOD**2/4,t,rho),arm=n.davit==='davit'?kgm(sectionArea.round(Math.max(25,n.flangeOD/20)),rho)*(n.flangeOD*1.6)/1000:n.davit==='hinge'?plateKg(150*120*2,Math.max(12,t/2),rho):0;
+  return (r.nozzlePlan?.items??[]).filter(n=>n.kind==='manhole'&&n.end!=='bare'&&!r.detailedTargets?.has('cover:'+n.id)&&!(r.input.referenceCase&&n.coverThickness===0)).map(n=>{const t=n.coverThickness>0?n.coverThickness:n.flangeThickness,cover=plateKg(PI*n.flangeOD**2/4,t,rho),arm=n.davit==='davit'?kgm(sectionArea.round(Math.max(25,n.flangeOD/20)),rho)*(n.flangeOD*1.6)/1000:n.davit==='hinge'?plateKg(150*120*2,Math.max(12,t/2),rho):0;
     return {id:n.id,name:n.name,diameter:n.flangeOD,coverThickness:t,coverWeight:cover,davit:n.davit,davitWeight:arm,handles:2,weight:cover+arm};});
 }
 const anglesFrom=(start,count)=>Array.from({length:count},(_,i)=>(start+i*360/count)%360);
 function supportPlan(r,loads){
   const p=r.input,s=r.methods.supports,rho=p.density,f=r.frame,ro=r.od/2,vertical=r.orientation==='vertical',out={type:s.type,bom:[],plates:[],welds:[],warnings:[],issues:[],notes:[],geometry:{}};
   if(s.type==='none'){
+    if(r.detailedSupport){out.notes.push('支承已改用分件明細，概算支承不重複計入；外形、孔位、載荷與強度尚待核。');return out;}
     if(!vertical)out.warnings.push('臥式槽需要鞍座支撐；請在支撐選「鞍座」。');
     else if(r.endTypes.bottom!=='flat')out.warnings.push('底部為錐形或封頭，槽體不能直接座落；請加支腿、耳座或裙座。');
     return out;
@@ -87,9 +91,9 @@ function supportPlan(r,loads){
     if(floor>-1e-9)issue('skirtHeight',`裙座高需大於下端外凸深度 ${f.bottomTangent.toFixed(0)} mm，槽底才會離地。`);
     if(out.issues.length)return out;
     if(r.endTypes.bottom==='flat')out.warnings.push('平底槽通常直接座落基礎；裙座多用於封頭或錐底槽。');
-    const mean=r.od-ts,circ=PI*mean,panelLen=p.stockLength-2*p.trim,panels=Math.ceil(circ/panelLen),courseH=p.stockWidth-2*p.trim,courses=Math.ceil(height/courseH);
+    const board=stockFor(p,p.material,ts,rho),mean=r.od-ts,circ=PI*mean,panelLen=board.stockLength-2*p.trim,panels=Math.ceil(circ/panelLen),courseH=board.stockWidth-2*p.trim,courses=Math.ceil(height/courseH);
     const pw=circ/panels+2*p.trim,ph=height/courses+2*p.trim,ringIn=r.od/2-ts-s.ringInside,ringOut=r.od/2+s.ringOutside,bt=Math.max(s.plateThickness,20);
-    const ring=sectorLayout({rhoIn:ringIn,rhoOut:ringOut,theta:360,stockWidth:p.stockWidth,stockLength:p.stockLength,trim:p.trim,bands:1});
+    const ringStock=stockFor(p,p.material,bt,rho),ring=sectorLayout({rhoIn:ringIn,rhoOut:ringOut,theta:360,stockWidth:ringStock.stockWidth,stockLength:ringStock.stockLength,trim:p.trim,bands:1});
     if(!ring.valid)issue('ringOutside','基礎環分片放不進原板：'+ring.reason);
     if(out.issues.length)return out;
     const skirtArea=circ*height-s.openings*PI*s.openingDiameter**2/4;
@@ -161,7 +165,7 @@ function ringPlan(r){
     const segments=ring.make==='plate'&&ring.section==='flat'?null:Math.ceil(length/ring.barLength),weight=kgm(area,rho)*length/1000;
     const spec=ring.section==='angle'?`L${a} × ${b} × ${t}`:ring.section==='channel'?`[${b} × ${a} × ${t}`:`FB ${a} × ${t}`;
     let plate=null;
-    if(ring.make==='plate'&&ring.section==='flat'){const inner=ring.side==='out'?ro:ri-a,outer=inner+a,layout=sectorLayout({rhoIn:inner,rhoOut:outer,theta:360,stockWidth:p.stockWidth,stockLength:p.stockLength,trim:p.trim,bands:1});
+    if(ring.make==='plate'&&ring.section==='flat'){const inner=ring.side==='out'?ro:ri-a,outer=inner+a,board=stockFor(p,p.material,t,rho),layout=sectorLayout({rhoIn:inner,rhoOut:outer,theta:360,stockWidth:board.stockWidth,stockLength:board.stockLength,trim:p.trim,bands:1});
       if(!layout.valid){out.issues.push({field:field('make'),message:`${ring.id}：環板分片放不進原板。`});return;}
       plate={id:'R'+(index+1),name:`${ring.id} 環板`,t,pieces:layout.pieces.map(x=>({w:x.w+2*p.trim,h:x.h+2*p.trim,outline:x.outline,area:x.area}))};out.plates.push(plate);}
     const weldFactor=ring.weld==='both'?2:1;
@@ -171,7 +175,7 @@ function ringPlan(r){
     // Welded where the ring touches the shell: outside rings on the outer surface, inside rings on the inner surface.
     const contactLength=2*PI*(ring.side==='out'?ro:ri);
     out.welds.push({name:ring.id+' 加強圈',kind:'fillet',leg:Math.min(t,p.shellThickness,8),length:contactLength*weldFactor*(ring.weld==='stitch'?.5:1)*(ring.weld==='stitch'?2:1)});
-    const seams=Array.from({length:r.courses-1},(_,i)=>(i+1)*(r.courseHeight+p.gap)-p.gap/2),reach=contact/2+20;
+    const seams=shellRingStations(r).map(s=>s.z),reach=contact/2+20;
     if(ring.purpose!=='curb'&&seams.some(h=>Math.abs(h-position)<reach))out.warnings.push(`${ring.id} 與筒身環縫太近，焊縫重疊；請錯開位置。`);
     for(const n of r.nozzlePlan?.items??[])if(n.host==='shell'&&Math.abs(n.height-position)<Math.max(n.hole/2,n.padRadius||0)+reach)out.warnings.push(`${ring.id} 經過 ${n.id} 開孔／補強板範圍；請改位置或在該處斷開加強圈。`);
   });
@@ -232,8 +236,8 @@ function jacketPlan(r){
     return out;
   }
   if(j.type==='full'){
-    const id=r.od+2*j.jacketGap,t=j.jacketThickness,mean=id+t,circ=PI*mean,panels=Math.ceil(circ/(p.stockLength-2*p.trim)),courses=Math.ceil(span/(p.stockWidth-2*p.trim));
-    const ring=sectorLayout({rhoIn:ro,rhoOut:id/2+t,theta:360,stockWidth:p.stockWidth,stockLength:p.stockLength,trim:p.trim,bands:1});
+    const id=r.od+2*j.jacketGap,t=j.jacketThickness,board=stockFor(p,p.material,t,rho),mean=id+t,circ=PI*mean,panels=Math.ceil(circ/(board.stockLength-2*p.trim)),courses=Math.ceil(span/(board.stockWidth-2*p.trim));
+    const ring=sectorLayout({rhoIn:ro,rhoOut:id/2+t,theta:360,stockWidth:board.stockWidth,stockLength:board.stockLength,trim:p.trim,bands:1});
     if(!ring.valid){out.issues.push({field:'methods.jacket.jacketGap',message:'夾套封閉環放不進原板。'});return out;}
     const pw=circ/panels+2*p.trim,ph=span/courses+2*p.trim;
     out.bom.push(bomLine('夾套筒板',`ID ${id.toFixed(0)} × t${t} × ${span.toFixed(0)}（${panels*courses} 片）`,1,'組',plateKg(circ*span,t,rho)),bomLine('夾套封閉環',`Ø${(id+2*t).toFixed(0)}／Ø${r.od.toFixed(0)} × ${t}`,2,'圈',plateKg(PI*((id/2+t)**2-ro*ro),t,rho)));
@@ -356,7 +360,7 @@ export function planAttachments(r){
   const top=vertical?f.bodyTop:r.od;
   const access=accessPlan(r,{top,floor}),insulation=insulationEstimate(r);
   // Loads for supports: everything carried (body, nozzles, every attachment, insulation) + liquid; test = water to the test fill.
-  const preliminary=r.netWeight+(r.nozzlePlan?.extraWeight??0)+padWeight+manholeWeight+groupWeight(rings)+groupWeight(jacket)+groupWeight(internals)+groupWeight(misc);
+  const preliminary=r.netWeight+(r.fabricationWeight??0)+(r.nozzlePlan?.extraWeight??0)+padWeight+manholeWeight+groupWeight(rings)+groupWeight(jacket)+groupWeight(internals)+groupWeight(misc);
   const carried=preliminary+groupWeight(access)+liftingLugWeight(r)+(insulation?.weight??0);
   const operatingLiquid=r.workingVolume*liquid,testWater=r.volume*1000*(r.methods.inspection.hydro?r.methods.inspection.testFill/100:1);
   const supportLoads={operating:(carried+operatingLiquid)*G/1000,test:(carried+testWater)*G/1000};
@@ -365,11 +369,15 @@ export function planAttachments(r){
   const weight=padWeight+manholeWeight+[rings,jacket,internals,supports,access,lifting,misc].reduce((s,g)=>s+groupWeight(g),0);
   const issues=[...supports.issues,...rings.issues,...access.issues,...jacket.issues,...internals.issues,...lifting.issues,...misc.issues];
   const warnings=[...supports.warnings,...rings.warnings,...access.warnings,...jacket.warnings,...internals.warnings,...lifting.warnings,...misc.warnings];
+  if(r.nozzlePlan?.unknownPipeCount)warnings.push(`${r.nozzlePlan.unknownPipeCount} 個一體長頸接件與內管尚未拆料；其重量及接件焊道未計，合計與吊運／支承載荷只是已計部分。`);
+  if((r.nozzlePlan?.items??[]).some(n=>n.padRadius>0&&n.axisMode==='parallel'&&Number(n.offset)!==0&&!r.detailedTargets?.has('pad:'+n.id)))warnings.push('平行偏心管嘴的補強板需按斜交輪廓展開；本次未以徑向圓板替代，未計入補強板備料與重量。');
+  if(p.referenceCase==='v1102-drawing-study')warnings.push('V-1102 支承 3D 為原圖幾何參考；分件表仍有待填尺寸、重量與焊道，不能以已知重量當整槽空重／吊運載重。');
+  if(p.referenceCase&&(r.nozzlePlan?.items??[]).some(n=>n.kind==='manhole'&&n.coverThickness===0&&!r.detailedTargets?.has('cover:'+n.id)))warnings.push('原圖手孔盲蓋厚度未確認；不以 WN 法蘭盤厚代入蓋板，蓋板與吊桿重量未計。');
   const shift=(points,x0,y0)=>points.map(([x,y])=>[x-x0,y-y0]);
   const padPlates=pads.length?Object.values(pads.reduce((acc,x)=>{const key=String(x.t);if(!acc[key])acc[key]={id:'NP'+(Object.keys(acc).length?Object.keys(acc).length+1:''),name:`補強板 t${x.t}`,t:x.t,pieces:[]};const x0=Math.min(...x.outline.outer.map(q=>q[0])),y0=Math.min(...x.outline.outer.map(q=>q[1]));acc[key].pieces.push({w:x.w+2*p.trim,h:x.h+2*p.trim,outline:shift(x.outline.outer,x0,y0),holes:[shift(x.outline.inner,x0,y0)],area:x.area,nozzle:x.id});return acc;},{})):[];
-  const plan={pads:{items:pads,plates:padPlates,weight:padWeight},manholes:{items:manholes,weight:manholeWeight},supports,rings,access,jacket,internals,lifting,misc,weight,emptyWeight:r.netWeight+(r.nozzlePlan?.extraWeight??0)+weight,issues,warnings,top,floor,
+  const plan={pads:{items:pads,plates:padPlates,weight:padWeight},manholes:{items:manholes,weight:manholeWeight},supports,rings,access,jacket,internals,lifting,misc,weight,emptyWeight:r.netWeight+(r.fabricationWeight??0)+(r.nozzlePlan?.extraWeight??0)+weight,issues,warnings,top,floor,
     loads:{...supportLoads,operatingLiquid,testWater,liquidDensity:liquid,liquidAssumed:liquid===1000&&String(p.liquidDensity??'').trim()===''},
-    bom:[...pads.map(x=>bomLine('補強板 '+x.id,`Ø${x.od.toFixed(0)}／Ø${x.hole.toFixed(0)} × ${x.t}${x.rollRadius?`（捲 R${x.rollRadius.toFixed(0)}）`:''}`,1,'片',x.weight)),...manholes.map(x=>bomLine('人孔蓋 '+x.id,`Ø${x.diameter} × ${x.coverThickness}${x.davit==='davit'?'＋吊桿':x.davit==='hinge'?'＋鉸鏈':''}`,1,'組',x.weight)),...supports.bom,...rings.bom,...access.bom,...jacket.bom,...internals.bom,...lifting.bom,...misc.bom],
+    bom:[...pads.map(x=>bomLine('補強板 '+x.id,`Ø${x.od.toFixed(0)}／Ø${x.hole.toFixed(0)} × ${x.t}${x.rollRadius?`（捲 R${x.rollRadius.toFixed(0)}）`:''}`,1,'片',x.weight,{nozzle:x.id})),...manholes.map(x=>bomLine('人孔蓋 '+x.id,`Ø${x.diameter} × ${x.coverThickness}${x.davit==='davit'?'＋吊桿':x.davit==='hinge'?'＋鉸鏈':''}`,1,'組',x.weight)),...supports.bom,...rings.bom,...access.bom,...jacket.bom,...internals.bom,...lifting.bom,...misc.bom],
     welds:[...pads.flatMap(x=>[{name:'補強板外緣 '+x.id,kind:'fillet',leg:x.weld.leg,length:x.weld.outer},{name:'補強板內緣 '+x.id,kind:'fillet',leg:x.weld.leg,length:x.weld.inner}]),...supports.welds,...rings.welds,...access.welds,...jacket.welds,...internals.welds,...lifting.welds,...misc.welds]};
   plan.parts=[...padPlates,...supports.plates,...rings.plates,...jacket.plates,...internals.plates,...lifting.plates,...misc.plates];
   return plan;

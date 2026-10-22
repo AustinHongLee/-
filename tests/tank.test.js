@@ -121,5 +121,5 @@ test('new layouts persist in projects and appear with procurement comparisons an
   const p={...TANK_DEFAULTS,stockWidth:1524,stockLength:3048,shellLayout:'upright',seamLayout:'aligned'},r=estimateTank(p);assert.deepEqual(readTankProject(tankProject(p)),p);
   const old={...p};delete old.shellLayout;delete old.seamLayout;assert.equal(readTankProject(tankProject(old)).shellLayout,'around');assert.equal(readTankProject(tankProject(old)).seamLayout,'stagger');
   for(const bad of [{shellLayout:'bad'},{seamLayout:'bad'}])assert.equal(estimateTank(bad).valid,false);
-  const html=tankWorkOrder(r),csv=tankCSV(r);assert.match(html,/板型與筒身組立/);assert.match(html,/5′ × 10′/);assert.match(html,/直立分片/);assert.match(html,/不完整/);assert.match(csv,/來源原板/);assert.match(csv,/餘料及切割損耗/);assert.match(csv,/筒身焊縫長 mm/);
+  const html=tankWorkOrder(r,{includeQuotes:true}),csv=tankCSV(r);assert.match(html,/板型與筒身組立/);assert.match(html,/5′ × 10′/);assert.match(html,/直立分片/);assert.match(html,/不完整/);assert.match(csv,/來源原板/);assert.match(csv,/餘料及切割損耗/);assert.match(csv,/筒身焊縫長 mm/);
 });

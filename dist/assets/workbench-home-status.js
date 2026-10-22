@@ -17,11 +17,12 @@ function card(tool,{tone='idle',title,lines=[],cta}){
 async function offsetStatus(){
   const text=read('special-method-offset-v1');if(!text)return card('offset',{lines:['從預設 XYZ 開始，先量兩個管口。']});
   try{
-    const [{readOffsetProject},{computeOffset},{originalRoutePlan}]=await Promise.all([import('./offset-exports.js'),import('./offset-geometry.js'),import('./offset-planner.js')]);
-    const {params,id,notices=[]}=readOffsetProject(text),r=computeOffset(params),xyz=`X ${fmt(params.run)} · Y ${fmt(params.roll)} · Z ${fmt(params.rise)}`;
-    // Same baseline the tool shows: the original route with any required valves/flanges installed.
-    const plan=r.valid&&r.basis==='ports'?originalRoutePlan(r):null,valid=r.valid&&(r.basis!=='ports'||plan?.valid);
-    if(valid){const pipes=plan?.pipes??[{length:r.cutLength}],elbows=plan?.elbows??Object.values(r.elbows);return card('offset',{tone:notices.length?'warn':'ok',title:id,lines:[`<b>直管 ${pipes.length>1?'共 ':''}${fmt(pipes.reduce((s,e)=>s+e.length,0),2)} mm</b> · ${elbows.map(e=>fmt(e.angle,1)+'°').join(' / ')}${plan?.components?.length?` · ${plan.components.length} 組零件`:''}`,notices.length?'<em>舊版專案：請核對 Y 方向／現成彎頭 Ta</em>':esc(xyz)],cta:notices.length?'開啟核對':'繼續加工單'});}
+    const [{readOffsetProject},{computeOffset},{originalWorkbenchPlan:originalRoutePlan,compareRoutePlans},{analyzeInstallation}]=await Promise.all([import('./offset-exports.js'),import('./offset-geometry.js'),import('./offset-planner.js'),import('./offset-installation.js')]);
+    const {params,id,notices=[],installation}=readOffsetProject(text),r=computeOffset(params),xyz=`X ${fmt(params.run)} · Y ${fmt(params.roll)} · Z ${fmt(params.rise)}`;
+    let plan=r.valid&&r.basis==='ports'?originalRoutePlan(r):null;
+    if(installation.selectedPlan&&params.basis==='ports'){const chosen=compareRoutePlans(params).plans.find(p=>p.key===installation.selectedPlan);if(chosen&&!chosen.original)plan=chosen;}
+    const valid=plan?.valid||r.valid&&r.basis!=='ports';
+    if(valid){const check=plan?analyzeInstallation(plan,installation):null,needsCheck=check&&check.status!=='clear',pipes=plan?.pipes??[{length:r.cutLength}],elbows=plan?.elbows??Object.values(r.elbows);return card('offset',{tone:notices.length||needsCheck?'warn':'ok',title:id,lines:[`<b>直管 ${pipes.length>1?'共 ':''}${fmt(pipes.reduce((s,e)=>s+e.length,0),2)} mm</b> · ${elbows.map(e=>fmt(e.angle,1)+'°').join(' / ')}${plan?.components?.length?` · ${plan.components.length} 組零件`:''}`,notices.length?'<em>舊版專案：請核對 Y 方向／現成彎頭 Ta</em>':needsCheck?'<em>'+esc(check.headline??check.message)+'</em>':esc(xyz)],cta:notices.length?'開啟核對':needsCheck?'核對組立與接合':'繼續加工單'});}
     const routeOnly=params.basis==='ports'&&(r.context||r.valid);
     return card('offset',{tone:routeOnly?'warn':'error',title:id,lines:[esc(routeOnly?(r.valid?'原接法放不下指定零件，需選其他接法':'原兩彎頭接不成，需選其他接法'):(r.errors?.[0]?.message??'尺寸需修正')),esc(xyz)],cta:'繼續修正'});
   }catch{return card('offset',{tone:'saved',lines:['有保存的專案，開啟後重新驗證。'],cta:'繼續'});}

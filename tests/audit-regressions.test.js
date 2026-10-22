@@ -164,9 +164,9 @@ test('clash test is exact and bounded for huge, very thin flanges',()=>{
   assert.equal(cylindersClash(disk([0,0,0],[0,1,0],100,30),disk([0,0,0],[0,1,0],100,30)),true);
 });
 
-test('offset projects are saved as v6; older saves that used Y or factory straights require review',()=>{
+test('offset projects are saved as v7; older saves that used Y or factory straights require review',()=>{
   const p={basis:'ports',layout:'rolling',run:800,roll:300,rise:500};
-  const json=offsetProjectJSON(p),data=JSON.parse(json);assert.equal(data.version,6);assert.deepEqual(readOffsetProject(json).notices,[]);
+  const json=offsetProjectJSON(p),data=JSON.parse(json);assert.equal(data.version,7);assert.deepEqual(readOffsetProject(json).notices,[]);
   data.version=4;const old=readOffsetProject(JSON.stringify(data));assert.equal(old.notices.length,1);assert.match(old.notices[0],/左＋Y/);
   data.params.roll=0;assert.equal(readOffsetProject(JSON.stringify(data)).notices.length,0);
 });

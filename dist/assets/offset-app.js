@@ -1,4 +1,6 @@
+import {uiIcon} from './offset-ui-icons.js';
 import {mountDraftPersistence} from './project-persistence.js';
+import {mountInstallation} from './offset-installation-ui.js';
 import {routeAngleSensitivity} from './offset-angle-sensitivity.js';
 import {mountAngleCheck} from './angle-check-ui.js';
 import {offsetReviewNotice,acknowledgeOffsetReview,requireOffsetReview} from './offset-project-review.js';
@@ -9,12 +11,17 @@ import {esc,fmt,offsetProjectJSON,readOffsetProject,offsetCSV,buildOffsetWorkOrd
 import {offsetDiagramSVG} from './offset-diagram.js';
 import {elbowFabricationSVG,elbowCutSteps} from './offset-fabrication.js';
 import {AXIS_OPTIONS,compareOffsetFit} from './offset-ports.js';
-import {compareRoutePlans,originalRoutePlan,processClass,PROCESS_NAMES,retainedRouteFrame,routeSearchScope} from './offset-planner.js';
+import {compareRoutePlans,originalWorkbenchPlan as originalRoutePlan,refitRouteGaps,processClass,PROCESS_NAMES,retainedRouteFrame,routeSearchScope} from './offset-planner.js';
 import {routePlanTitle,buildRoutePlanWorkOrder,routePlanCSV} from './offset-plan-exports.js';
 import {assemblySVG,pipeFabricationSVG,materialRows,cutClockSVG} from './offset-workflow-ui.js';
 import {offsetRecoveryItems,offsetFieldRoute,nextOffsetAction} from './offset-recovery.js';
-import {portScene,sceneDragDelta,SCENE_VIEWS,directionIcon,stockElbowSVG,elbowIcon,weldSketchSVG} from './offset-input-visuals.js';
-import {COMPONENT_NAMES,CONNECTION_NAMES,validateComponents,componentTargetLabel,installRouteComponents} from './offset-components.js';
+import {portScene,sceneDragDelta,directionIcon,stockElbowSVG,elbowIcon} from './offset-input-visuals.js';
+import {routeInputScene,sceneReadouts} from './offset-measure-scene.js';
+import {mountInputScene} from './offset-input-scene-ui.js';
+import {jointGapTarget,gapTargetKey,gapInputTargets,gapInputValue,withGapInput} from './offset-gap-inputs.js';
+import {COMPONENT_NAMES,CONNECTION_NAMES,componentTargetLabel,installRouteComponents,validateComponents} from './offset-components.js';
+import {mountComponentEditor} from './offset-component-editor.js';
+import {componentSpecification,componentLengthBasis} from './offset-component-presets.js';
 import {partName,componentIcon,componentFabricationSVG} from './offset-component-ui.js';
 import {mountWorkbenchStatus} from './workbench-status.js';
 import {initFlowPanel,setFlowOd,flowCardLine,getMedium,setMedium,flowContext,setOwnerSheetState} from './offset-flow-ui.js';
@@ -25,10 +32,14 @@ const projectDraft=mountDraftPersistence({key:storageKey,name:'偏移配管專�
 const supplyKeys=['Kind','Donor','Radius','RadiusMethod','MeasuredArc','FactoryAngle','Takeout','Tangent'];
 let params={...DEFAULT_OFFSET,basis:'ports',solve:'run',layout:'rolling',run:800},id='OFF-001',result,baseline=null,stage=1,sharedStock=true,activePlan=null,routePlans=null,planGeneration=0,piece='P1',selected=0,showErrors=false;
 let editor='position',selectedPort=null,sceneView='iso',sceneFrame=null,dragState=null,dragTick=null,suppressPortClick=0;
+let inputJoint=null,inputJointRendered=null,inputPlanNotice='',inputGapPlan=null,inputGapFailed=false,inputJointRecords=[];
 let issues=[],activeIssueId=null,attemptedCalculation=false,searchPending=false;
 let viewer=null,viewerPromise=null,view='offset',printHTML='',printTitle='',toastTimer;
 let solutionViewer=null,solutionViewerPromise=null,solutionView='3d',solutionViewerPlan=null,solutionViewerFailed=false;
-let componentDraft=null,componentIssues=[],legacyReview=[];
+let componentIssues=[],legacyReview=[],chooseView='overview';
+const componentEditor=mountComponentEditor($('component-editor'),{current:()=>({params,plan:workRoute()}),onApply:applyComponents,onMessage:message=>toast(message)});
+const inputScene=mountInputScene({onSelect:key=>{const [kind,value]=key.split(':');if(kind==='port')chooseEndpoint(value);else if(kind==='dimension')focusDimension(value);else if(kind==='joint')chooseInputJoint(value);},onViewChange:view=>document.querySelectorAll('[data-scene-view]').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.sceneView===view)))});
+const installationPanel=mountInstallation($('offset-installation'),{onChange:()=>saveDraft(),onStatus:()=>renderStatus()});
 const offsetAngleCheck=mountAngleCheck($('offset-angle-check'),{title:'量角誤差會讓端口差多少？',current:()=>workRoute(),analyze:routeAngleSensitivity,kind:'offset'});
 function toast(message){$('offset-toast').textContent=message;$('offset-toast').hidden=false;clearTimeout(toastTimer);toastTimer=setTimeout(()=>$('offset-toast').hidden=true,4500);}
 const number=value=>value.trim()===''?null:Number(value);
@@ -51,7 +62,14 @@ function syncInputs(){
   for(const key of Object.keys(DEFAULT_OFFSET)){const c=$('offset-inputs').elements.namedItem(key);if(c)c.value=params[key]??'';}
   $('offset-nps').value=nps();$('offset-id').value=id;sharedStock=suppliesMatch();$('offset-same-stock').checked=sharedStock;elbowFields('a');elbowFields('b');portFields();syncVisibility();
 }
-function gapKeys(){return params.basis==='ports'?['aPortGap','aGap','bGap','bPortGap']:['aGap','bGap'];}
+function gapTargets(){const targets=params.basis==='ports'?gapInputTargets(workRoute()??inputGapPlan):[];return targets.length?targets:(params.basis==='ports'?['aPortGap','aGap','bGap','bPortGap','planExtraGap']:['aGap','bGap']).map(field=>({field,componentId:null}));}
+function syncGapControls(){for(const key of ['aPortGap','aGap','bGap','bPortGap','planExtraGap'])if($('offset-'+key))$('offset-'+key).value=params[key]??'';}
+function renderGapChange(previous){
+  if(previous)inputGapPlan=previous;const template=previous??inputGapPlan;
+  inputPlanNotice='';const fitted=template&&refitRouteGaps(template,params);result=computeOffset(params);baseline=originalView();invalidatePlans();inputGapFailed=Boolean(template&&!fitted?.valid);
+  if(template){if(fitted?.valid){activePlan=fitted.original?null:fitted;inputGapPlan=fitted;inputPlanNotice='已依間隙重算直管，保留目前接法。';}else inputPlanNotice='目前間隙無法完成剛才的接法；修正欄位或重新選接法。';}
+  $('save-offset').disabled=!projectReady()||inputGapFailed;syncGapControls();syncVisibility();renderInputVisuals();renderSolution();renderWork();if(inputGapFailed)projectDraft.pending('間隙待修正，剛才的接法尚未保存');else saveDraft();
+}
 function syncVisibility(){
   const ports=params.basis==='ports',rolling=params.layout==='rolling',angle=!ports&&params.solve==='angle';
   $('port-datum-fields').hidden=!ports;$('port-orientation-fields').hidden=!ports;$('legacy-solve-fields').hidden=ports;$('port-shift-fields').hidden=params.datum!=='marks';
@@ -62,46 +80,28 @@ function syncVisibility(){
   $('stock-b-section').hidden=sharedStock;$('stock-a-title').textContent=sharedStock?'兩端彎頭':'A 端彎頭';$('stock-a-title').hidden=sharedStock;
   $('plan-margin-field').hidden=params.planSpaceLimit!=='margin'&&document.activeElement?.name!=='planMargin';
   document.querySelector('.offset-plan-options summary').textContent=`比較條件：${{welds:'焊口少',easy:'加工容易',compact:'空間小'}[params.planPreference]??'請選排序'}，上限 ${params.planMaxJoints??'—'} 個焊口`;
-  const values=gapKeys().map(k=>params[k]),same=values.every(v=>v===values[0]);
+  const values=gapTargets().map(t=>gapInputValue(params,t)),same=values.every(v=>v===values[0]);
   if(document.activeElement!==$('offset-all-gap'))$('offset-all-gap').value=same?(values[0]??''):'';
-  $('offset-all-gap').placeholder=same?'':'各焊口不同';$('gap-shared-note').textContent=same?'依現場工法／WPS 填寫。':'目前各別間隙不同，展開下方可修改；填此欄會統一間隙。';
+  $('offset-all-gap').placeholder=same?'':'各焊口不同';$('gap-shared-note').textContent=(workRoute()?.valid?'套用目前接法的所有焊口；螺栓接合預留另外填。':'設定原接法與新增焊口的預設間隙。')+(same?'依現場工法／WPS 填寫。':'目前各口不同，可點圖逐口查看。');
   $('measurement-help').textContent=ports?'同一個 XYZ 基準，從 A 量到 B。選邊緣／標記點時，補各端到中心的修正量。':'Run／Travel 從中心線理論交點量，不能填既有管口端面間距。切換模式後須重新核對量測基準。';
 }
 function originalView(){
-  const plan=originalRoutePlan(result);componentIssues=plan?.componentIssues??[];if(plan?.valid){const elements=plan.elements.map(e=>e.type==='elbow'?{...e,id:e.index===0?'A':'B',end:e.index===0?'A':'B'}:e);return {...plan,elements,elbows:elements.filter(e=>e.type==='elbow')};}
+  const plan=originalRoutePlan(result);componentIssues=plan?.componentIssues??[];if(plan?.valid)return plan;
   if(params.components.length)return null;
   if(!result.valid)return null;
   const elbow=(end)=>({...result.elbows[end],id:end.toUpperCase(),type:'elbow',process:result.elbows[end].kind==='factory'?'full':processClass(result.elbows[end].angle,result.elbows[end].donor)}),pipe={id:'P1',type:'pipe',length:result.cutLength,blankLength:result.blankLength};
   return {valid:true,original:true,legacy:true,elements:[elbow('a'),pipe,elbow('b')],elbows:[elbow('a'),elbow('b')],pipes:[pipe],jointCount:2,params:result.params};
 }
-const workRoute=()=>activePlan??baseline;
+const workRoute=()=>activePlan??(inputGapFailed?null:baseline);
 function renderComponentPanel(){
   $('component-panel').hidden=params.basis!=='ports'&&!params.components.length;
-  $('component-list').innerHTML=params.components.length?`<div class="component-chips">${params.components.map(c=>`<button type="button" class="component-chip" data-edit-component="${c.id}">${componentIcon(c.kind)}<span>${esc(c.id)} ${esc(c.name||COMPONENT_NAMES[c.kind])}<small>${esc(componentTargetLabel(c.target))} · ${fmt(c.length)} mm</small></span></button>`).join('')}</div>`:'';
+  $('component-list').innerHTML=params.components.length?`<div class="component-chips">${params.components.map(c=>`<button type="button" class="component-chip" data-edit-component="${c.id}">${componentIcon(c.kind)}<span>${esc(c.id)} ${esc(c.name||COMPONENT_NAMES[c.kind])}<small>${esc(componentTargetLabel(c.target))} · ${fmt(c.length)} mm${c.flange?'<br>'+esc(componentSpecification(c)):''}</small></span></button>`).join('')}</div>`:'';
   const plan=workRoute(),over=plan?.components?.length&&plan.jointCount>params.planMaxJoints;
   $('component-fit-message').innerHTML=!plan&&componentIssues.length?componentIssues.map(message=>`<p>${esc(message)}</p>`).join('')+'<button type="button" class="button" data-component-search>找放得下零件的接法 →</button>':over?`<p>此接法含零件後有 ${plan.jointCount} 個現場焊口，超過建議搜尋上限 ${params.planMaxJoints} 個。</p><button type="button" class="button" data-component-joint-limit="${plan.jointCount}">提高到 ${plan.jointCount} 個焊口，再比較接法 →</button>`:'';
   if(!plan&&params.components.length&&!routePlans?.plans.length&&routePlans?.requiredJoints)$('component-fit-message').insertAdjacentHTML('beforeend',`<p>找到的接法含指定零件後至少 ${routePlans.requiredJoints} 個焊口，目前上限 ${params.planMaxJoints} 個。</p><button type="button" class="button" data-component-joint-limit="${routePlans.requiredJoints}">提高到 ${routePlans.requiredJoints} 個焊口，再比較接法 →</button>`);
 }
 function openComponentEditor(target=null,id=null){
-  const existing=params.components.find(c=>c.id===id||!id&&c.target===target);
-  const used=new Set(params.components.map(c=>c.target)),available=['s1','a','b','s2','s3'].find(t=>!used.has(t));
-  if(!existing&&!available){toast('各位置已有零件，點現場零件圖卡修改整組尺寸。');return;}
-  const nextID='C'+(Math.max(0,...params.components.map(c=>Number(c.id.slice(1))))+1),gap=params.planExtraGap??0;
-  componentDraft=existing?{...existing}:{id:nextID,kind:'valve',name:'',target:target&&!used.has(target)?target:available,length:null,leftConnection:'weld',rightConnection:'weld',leftGap:gap,rightGap:gap,placement:'center',distance:0,internalBolts:0};
-  const source=workRoute()?.basePlan??workRoute();
-  $('component-target').innerHTML=['a','s1','s2','s3','b'].map(t=>{const slot=t==='a'?0:t==='b'?source?.elbows.length:Number(t.slice(1)),pipe=source?.pipes?.find(e=>e.slot===slot);return `<option value="${t}"${used.has(t)&&t!==existing?.target?' disabled':''}>${esc(componentTargetLabel(t))}${pipe?'（'+esc(pipe.id)+'）':''}</option>`;}).join('');
-  for(const key of ['target','length','name','leftConnection','rightConnection','leftGap','rightGap','placement','distance','internalBolts'])$('component-'+key).value=componentDraft[key]??'';
-  $('component-editor-title').textContent=existing?'修改 '+existing.id+' · '+(existing.name||COMPONENT_NAMES[existing.kind]):'加入現場零件';$('component-remove').hidden=!existing;
-  $('component-form-error').hidden=true;renderComponentDraft();$('component-editor').showModal();$('component-length').focus();
-}
-function readComponentDraft(){
-  for(const key of ['target','length','name','leftConnection','rightConnection','leftGap','rightGap','placement','distance','internalBolts'])componentDraft[key]=['length','leftGap','rightGap','distance','internalBolts'].includes(key)?number($('component-'+key).value):$('component-'+key).value;
-  if(componentDraft.placement==='center'||['a','b'].includes(componentDraft.target))componentDraft.distance=0;
-}
-function renderComponentDraft(){
-  $('component-kind-options').innerHTML=Object.entries(COMPONENT_NAMES).map(([kind,name])=>`<button type="button" data-component-kind="${kind}" aria-pressed="${componentDraft.kind===kind}">${componentIcon(kind)}${name}</button>`).join('');
-  $('component-sketch').innerHTML=componentFabricationSVG({...componentDraft,type:'component'});
-  const atPort=['a','b'].includes(componentDraft.target);$('component-position-fields').hidden=atPort;$('component-distance-field').hidden=componentDraft.placement==='center';$('component-distance-label').textContent=(componentDraft.placement==='fromB'?'B':'A')+' 側成品直管長 mm';
+  componentEditor.open(target,id);
 }
 async function applyComponents(next){
   const previous=activePlan?{...(activePlan.basePlan??activePlan),id:activePlan.id}:null;params.components=next;result=computeOffset(params);baseline=originalView();invalidatePlans();
@@ -110,7 +110,7 @@ async function applyComponents(next){
   if(!workRoute()?.valid&&result.context){$('offset-plans').open=true;await comparePlans();}
 }
 const projectReady=()=>result.valid||params.basis==='ports'&&Boolean(result.context);
-function saveDraft(){if(!projectReady()){projectDraft.pending('尺寸待修正，目前修改尚未保存');return;}try{projectDraft.write(offsetProjectJSON(params,id,getMedium(),legacyReview));}catch{projectDraft.pending('專案資料需修正，目前修改尚未保存');}}
+function saveDraft(){if(inputGapFailed||!projectReady()){projectDraft.pending(inputGapFailed?'間隙待修正，剛才的接法尚未保存':'尺寸待修正，目前修改尚未保存');return;}try{projectDraft.write(offsetProjectJSON(params,id,getMedium(),legacyReview,installationPanel.getSpec()));}catch{projectDraft.pending('專案資料需修正，目前修改尚未保存');}}
 function metrics(items){return `<dl class="workflow-metrics">${items.map(([label,value])=>`<div><dt>${label}</dt><dd>${esc(value)}</dd></div>`).join('')}</dl>`;}
 function renderErrors(){
   issues=offsetRecoveryItems(result,{sharedStock});
@@ -130,6 +130,7 @@ function renderErrors(){
 function controlFor(field){const choices=[...document.querySelectorAll(`[name="${CSS.escape(field)}"]`)];return choices.find(c=>c.type==='radio'&&c.checked)??choices[0]??null;}
 function jumpToRecovery(item,override=null){
   if(!item)return;showErrors=true;activeIssueId=item.id;
+  if((override??item.route).field==='components'){const invalid=params.components.find(c=>validateComponents([c],params.od).length)??params.components[0];openComponentEditor(null,invalid?.id);return;}
   const route=override??item.route;stage=route.stage;updateStages();
   if(stage===1){selectedPort=route.graphicalAxis?route.end:null;setEditor(route.editor);renderInputVisuals();renderErrors();}
   else{$('offset-plans').open=true;document.querySelector('.offset-plan-options').open=true;if(route.field==='planMargin')$('plan-margin-field').hidden=false;}
@@ -153,24 +154,37 @@ function nextWorkflow(){
 }
 async function exploreOtherRoutes(){
   if(!result.context){showErrors=true;renderErrors();jumpToRecovery(issues[0]);return;}
-  attemptedCalculation=true;stage=2;renderSolution();$('offset-plans').open=true;await comparePlans();focusStage();
+  attemptedCalculation=true;chooseView='overview';stage=2;renderSolution();$('offset-plans').open=true;await comparePlans();focusStage();
 }
-function focusStage(){window.scrollTo({top:0,behavior:'instant'});const h=document.querySelector(`[data-stage="${stage}"] .workflow-stage-head h2`);h.tabIndex=-1;h.focus({preventScroll:true});}
+function focusStage(){const h=document.querySelector(`[data-stage="${stage}"] .workflow-stage-head h2`);if(stage===1)window.scrollTo({top:0,behavior:'instant'});else h.scrollIntoView({block:'start',behavior:'instant'});h.tabIndex=-1;h.focus({preventScroll:true});}
 function focusRouteChoices(){
-  stage=2;renderSolution();$('offset-plans').open=true;
+  chooseView='overview';stage=2;renderSolution();$('offset-plans').open=true;
   $('offset-plan-status').textContent='請點下方一張接法圖卡，查看組立圖、管長與加工方式。';
   const card=$('offset-plan-cards').querySelector('button');
   card?.scrollIntoView({block:'center',behavior:'instant'});card?.focus({preventScroll:true});
 }
 function renderRouteContext(){
   const scope=routeSearchScope(params),unavailable=params.basis==='ports'&&result.context&&!baseline;
-  const box=$('offset-route-context');box.hidden=params.basis!=='ports'||!unavailable&&!scope.limitedByWelds;if(box.hidden)return;
+  const box=$('offset-route-context');box.hidden=params.basis!=='ports'||Boolean(activePlan)&&!scope.limitedByWelds||!unavailable&&!scope.limitedByWelds;if(box.hidden)return;
   const candidates=routePlans?.valid?routePlans.plans.filter(p=>!p.original).length:0;
   const title=unavailable?(activePlan?`已選 ${activePlan.elbows.length} 彎頭接法，${activePlan.jointCount} 個焊口。`:searchPending?'正在搜尋其他接法…':candidates?`找到 ${candidates} 個接法，請點圖卡選擇。`:'原兩彎頭接法不成立，改比較其他配置。'):'目前的焊口上限限制了彎頭數。';
   box.innerHTML=`<strong>${esc(title)}</strong><p>搜尋最多 ${fmt(params.planMaxElbows)} 個彎頭、${fmt(params.planMaxJoints)} 個焊口（含兩端）。${scope.limitedByWelds?`此焊口上限實際只容許 ${scope.effectiveElbows} 個彎頭；三彎頭至少需 6 個焊口，四彎頭至少需 8 個。`:''}</p>${scope.canExpand?'<button type="button" class="button" data-expand-search>允許搜尋 3／4 彎頭（最多 8 焊口） →</button>':''}${unavailable?`<small>新增供料 ${fmt(params.planExtraDonor)}°／Rc ${fmt(params.planExtraRadius)} mm · 新增焊口間隙 ${fmt(params.planExtraGap)} mm，可在比較條件修改。</small><details><summary>查看原兩彎頭接法的限制</summary><p>${result.errors.map(e=>esc(e.message)).join('<br>')}<br>這些限制只針對原兩彎頭配置；候選接法各自核對端口位置、朝向、供料角度及管長。</p></details>`:''}`;
 }
 
+function setChooseView(value){
+  chooseView=value==='installation'&&workRoute()?.valid&&!workRoute()?.legacy?'installation':'overview';
+  updateStages();
+}
+function syncChooseWorkspace(){
+  const valid=workRoute()?.valid&&!workRoute()?.legacy;
+  if(!valid)chooseView='overview';
+  document.querySelector('[data-stage="2"]').dataset.chooseWorkspace=chooseView;
+  document.querySelector('.choose-task-nav').hidden=!workRoute()?.valid;
+  document.querySelectorAll('[data-choose-view]').forEach(b=>{b.setAttribute('aria-pressed',String(b.dataset.chooseView===chooseView));if(b.dataset.chooseView==='installation')b.disabled=!valid;});
+  if(chooseView==='installation'){$('offset-installation').open=true;$('choose-title').textContent='怎麼裝，焊不焊得到？';}else $('choose-title').textContent=workRoute()?.valid?'先看焊口少的接法':'找其他可行的接法';
+}
 function renderSolution(){
+  installationPanel.sync(workRoute());
   $('offset-angle-check').hidden=!workRoute()?.valid;offsetAngleCheck.sync(workRoute()?.key??JSON.stringify(workRoute()?.params??null));
   const plan=workRoute();$('measurement-summary').textContent=params.basis==='ports'?`X ${fmt(params.run)} · Y ${fmt(params.layout==='rolling'?params.roll:0)} · Z ${fmt(params.rise)} mm`:'理論交點量測模式';
   $('solution-title').textContent=activePlan?routePlanTitle(activePlan):'原兩彎頭接法';$('offset-status').textContent=activePlan?'建議 '+activePlan.id:'原方案';
@@ -178,7 +192,7 @@ function renderSolution(){
   document.querySelector('.solution-card').hidden=!plan;$('choose-title').textContent=plan?'先看焊口少的接法':'找其他可行的接法';
   $('solution-diagram').innerHTML=plan?(plan.legacy?offsetDiagramSVG(result):assemblySVG(plan,{interactive:true})):'<p class="workflow-empty">目前無法完成兩彎頭接法，可展開下方找其他接法。</p>';
   $('solution-diagram').classList.toggle('legacy-diagram',Boolean(plan?.legacy));
-  $('offset-values').innerHTML=plan?metrics([[plan.legacy?'中間焊口':'焊口',plan.jointCount+' 個'],['彎頭',plan.elbows.length+' 個'],['直管',plan.pipes.length+' 段']])+`<table class="material-table"><tbody>${materialRows(plan)}</tbody></table>`:'';
+  $('offset-values').innerHTML=plan?metrics([[plan.legacy?'中間焊口':'焊口',plan.jointCount+' 個'],['彎頭',plan.elbows.length+' 個'],['直管',plan.pipes.length+' 段']])+`<details class="solution-materials"><summary>零件與下料明細 <span>${plan.elements.length} 件</span></summary><table class="material-table"><tbody>${materialRows(plan)}</tbody></table></details>`:'';
   renderComponentPanel();renderErrors();renderRouteContext();updateStages();
 }
 function renderWork(){
@@ -198,7 +212,7 @@ function renderCut(){
   if(e.type==='component'){
     $('offset-cut-values').innerHTML=`<p class="cut-instruction">依實物組立總長 <strong>${fmt(e.length)} mm</strong> 備料，不切除閥體或法蘭。</p>`;
     $('offset-fabrication-diagram').innerHTML=componentFabricationSVG(e);
-    $('offset-cut-steps').innerHTML=`<ol class="offset-shop-steps"><li>核對 ${esc(e.name||COMPONENT_NAMES[e.kind])}，包含組內配對件的接管端面距離 ${fmt(e.length)} mm。</li><li>A 側 ${CONNECTION_NAMES[e.leftConnection]}，額外預留 ${fmt(e.leftGap)} mm；B 側 ${CONNECTION_NAMES[e.rightConnection]}，額外預留 ${fmt(e.rightGap)} mm。已計入管長，不重複扣。</li><li>按組立圖試組，核對閥流向、法蘭孔位與實物操作空間。</li></ol><button type="button" class="button component-inline-action" data-edit-component="${e.id}">修改這組零件／位置</button>`;return;
+    $('offset-cut-steps').innerHTML=`<ol class="offset-shop-steps"><li>核對 ${esc(e.name||COMPONENT_NAMES[e.kind])}，包含組內配對件的接管端面距離 ${fmt(e.length)} mm。${esc(componentSpecification(e))} · ${esc(componentLengthBasis(e))}。</li><li>A 側 ${CONNECTION_NAMES[e.leftConnection]}，額外預留 ${fmt(e.leftGap)} mm；B 側 ${CONNECTION_NAMES[e.rightConnection]}，額外預留 ${fmt(e.rightGap)} mm。已計入管長，不重複扣。</li><li>按組立圖試組，核對閥流向、法蘭孔位與實物操作空間。</li></ol><button type="button" class="button component-inline-action" data-edit-component="${e.id}">修改這組零件／位置</button>`;return;
   }
   if(e.type==='pipe'){
     const allowances=plan.legacy?{...params,trimA:0,trimB:0}:params;
@@ -236,11 +250,14 @@ function renderStatus(){
   // Once a valid alternative route is chosen, the original route's problems are history, not blockers.
   for(const item of issues)list.push({level:valid&&activePlan?'info':item.inputError?'error':'warn',text:item.title+(item.detail?'：'+item.detail:''),actionLabel:item.actionLabel??'帶我修正',action:()=>{if(stage!==1)goTo(1);showErrors=true;renderErrors();jumpToRecovery(item);}});
   for(const key of legacyReview)list.push({level:'warn',text:offsetReviewNotice(key),actionLabel:'前往核對',action:()=>{$('offset-review').scrollIntoView({behavior:'smooth',block:'center'});$('offset-review').querySelector('button')?.focus();}});
-  for(const message of componentIssues)list.push({level:'warn',text:message,actionLabel:'看零件',action:()=>{if(stage!==2&&workRoute()?.valid!==undefined)goTo(2);$('component-panel')?.scrollIntoView({behavior:'smooth',block:'center'});}});
+  const installation=valid&&!plan.legacy?installationPanel.getAnalysis():null;
+  if(installation&&installation.status!=='clear')list.push({level:'warn',text:installation.headline??installation.message,actionLabel:'看組立與接合空間',action:()=>{if(stage!==2)goTo(2);setChooseView('installation');$('offset-installation').open=true;$('offset-installation').scrollIntoView({behavior:'smooth',block:'start'});}});
+  for(const message of componentIssues)list.push({level:'warn',text:message,actionLabel:'看零件',action:()=>{if(stage!==2&&workRoute()?.valid!==undefined)goTo(2);setChooseView('overview');$('component-panel')?.scrollIntoView({behavior:'smooth',block:'center'});}});
+  const glance=document.querySelector('[data-install-glance]');if(glance){glance.textContent=installation?.status==='clear'?'已核對':installation?.status==='review'?'需處理':'待核對';glance.dataset.state=installation?.status??'unverified';}
   const pipes=plan?.pipes??[],elbows=plan?.elbows??[];
   const metrics=valid?[{label:pipes.length>1?'直管總長':'直管成品',value:fmt(pipes.reduce((s,e)=>s+e.length,0)),unit:'mm'},{label:'彎頭',value:elbows.map(e=>fmt(e.angle,1)+'°').join(' / ')||'—',quiet:elbows.length>2},{label:'焊口',value:String(plan.jointCount??'—'),unit:'個'},{label:'量測',value:measured,quiet:true}]:[{label:'量測',value:measured,quiet:true}];
   const inputErrors=list.some(i=>i.level==='error'),routeMissing=!valid&&params.basis==='ports'&&Boolean(result.context);
-  const title=valid?(stage===3?'可出加工單':activePlan?`已選 ${activePlan.id} 接法`:'原兩彎頭接法成立'):inputErrors?'尺寸待修正':routeMissing?'原接法不成立 · 選其他接法':'接法不成立';
+  const title=valid?(installation?.status!=='clear'&&!plan.legacy?'幾何成立 · 組入／接合待核對':stage===3?'可出加工單':activePlan?`已選 ${activePlan.id} 接法`:'原兩彎頭接法成立'):inputErrors?'尺寸待修正':routeMissing?'原接法不成立 · 選其他接法':'接法不成立';
   if(routeMissing&&!list.length)list.push({level:'warn',text:'端口資料完整，但原兩彎頭接不成；請比較其他接法或調整供料。',actionLabel:'找接法',action:()=>exploreOtherRoutes()});
   statusStripUpdate({tone:valid?(list.some(i=>i.level!=='info')?'warn':'ok'):inputErrors?'error':'warn',title,detail:valid?`${plan.elbows.length} 彎頭 · ${plan.pipes.length} 段直管${plan.components?.length?' · '+plan.components.length+' 組零件':''}`:'修正後才會出加工單',metrics,issues:list});
   // Stepper: each step carries its own result so progress reads without opening it.
@@ -252,18 +269,21 @@ function updateStages(){
   const measurable=result.valid||Boolean(result.context),valid=Boolean(workRoute()?.valid);
   document.querySelectorAll('[data-stage]').forEach(el=>el.hidden=Number(el.dataset.stage)!==stage);
   document.querySelectorAll('[data-step]').forEach(b=>{const n=Number(b.dataset.step);if(n===stage)b.setAttribute('aria-current','step');else b.removeAttribute('aria-current');b.disabled=n>1&&(!measurable||searchPending);});
-  $('workflow-progress').textContent=stage===1?{position:params.basis==='ports'?'現場端口':'理論交點',stock:'手邊供料',gaps:'焊口與留料'}[editor]:`第 ${stage}／3 步`;$('workflow-prev').hidden=stage===1&&editor==='position';
+  $('workflow-progress').textContent=stage===1?{position:params.basis==='ports'?'現場端口':'理論交點',stock:'手邊供料',gaps:'焊口與留料'}[editor]:`第 ${stage}／3 步`;$('workflow-prev').innerHTML=uiIcon('chevron')+'<span>上一步</span>';$('workflow-prev').hidden=stage===1&&editor==='position';
   const next=nextOffsetAction({stage,editor,attempted:attemptedCalculation,valid,issues,comparison:routePlans});
-  $('workflow-next').textContent=searchPending?'正在搜尋接法…':next.action==='editor'?`下一步：${next.editor==='stock'?'選彎頭材料':'留焊口間隙'}`:({repair:'帶我修正',calculate:'查看接法',search:'搜尋可行接法',choose:'展開接法，點圖選擇',limits:'調整搜尋條件','comparison-repair':'修正搜尋條件',work:'看加工單',print:'列印加工單／PDF'}[next.action]);$('workflow-next').disabled=searchPending||stage===3&&!valid;
-  if(stage===1){$('measure-title').textContent={position:params.basis==='ports'?'先量兩個端口的距離':'量中心線交點的偏移',stock:'再確認手邊彎頭與管徑',gaps:'最後填焊口間隙與留料'}[editor];document.querySelector('[data-stage="1"] .workflow-stage-head>p').textContent={position:params.basis==='ports'?'填現場實測值，點圖可粗調與選朝向。':'填理論交點尺寸或已知角度，依選定基準計算。',stock:'確認原件角度與實際尺寸，兩端相同只填一次。',gaps:'間隙從管長扣除，修磨留料另加。'}[editor];}
+  $('workflow-next').textContent=searchPending?'正在搜尋接法…':next.action==='editor'?`下一步：${next.editor==='stock'?'選彎頭材料':'留焊口間隙'}`:({repair:'帶我修正',calculate:'查看接法',search:'搜尋可行接法',choose:'展開接法，點圖選擇',limits:'調整搜尋條件','comparison-repair':'修正搜尋條件',work:'看加工單',print:'列印加工單／PDF'}[next.action]);$('workflow-next').disabled=searchPending||stage===3&&!valid;$('workflow-next').innerHTML=uiIcon(stage===3?'document':'arrow')+'<span>'+$('workflow-next').textContent+'</span>';
+  if(stage===1){$('measure-title').textContent={position:params.basis==='ports'?'先量兩個端口的距離':'量中心線交點的偏移',stock:'再確認手邊彎頭與管徑',gaps:'最後填焊口間隙與留料'}[editor];document.querySelector('[data-stage="1"] .workflow-stage-head>p').textContent={position:params.basis==='ports'?'填現場實測值，旋轉 3D 看位置；點管口選朝向。':'填理論交點尺寸或已知角度，依選定基準計算。',stock:'確認原件角度與實際尺寸，兩端相同只填一次。',gaps:'間隙從管長扣除，修磨留料另加。'}[editor];}
+  inputScene.setActive(stage===1&&params.basis==='ports');
   viewer?.setActive(stage===3&&$('workflow-model').open&&valid);
+  installationPanel.setActive(stage===2&&valid&&chooseView==='installation');
+  syncChooseWorkspace();
   syncSolutionViewer();
   renderStatus();
   if(legacyReview.length){$('offset-csv').disabled=true;$('print-offset-strips').disabled=true;}
 }
-function stopSolutionSpin(){solutionViewer?.setAutoRotate(false);const button=document.querySelector('[data-solution-motion="spin"]');button.setAttribute('aria-pressed','false');button.textContent='自動旋轉';}
+function stopSolutionSpin(){solutionViewer?.setAutoRotate(false);const button=document.querySelector('[data-solution-motion="spin"]');button.setAttribute('aria-pressed','false');button.innerHTML=uiIcon('rotate')+'<span>自動旋轉</span>';}
 function syncSolutionViewer(){
-  const plan=workRoute(),live=solutionView==='3d'&&!solutionViewerFailed,active=stage===2&&live&&Boolean(plan?.valid);
+  const plan=workRoute(),live=solutionView==='3d'&&!solutionViewerFailed,active=stage===2&&chooseView==='overview'&&live&&Boolean(plan?.valid);
   $('solution-live').hidden=!live;$('solution-diagram').hidden=live;
   document.querySelectorAll('[data-solution-view]').forEach(button=>{button.setAttribute('aria-pressed',String(button.dataset.solutionView===(live?'3d':'diagram')));button.disabled=button.dataset.solutionView==='3d'&&solutionViewerFailed;});
   document.querySelectorAll('[data-solution-motion]').forEach(button=>button.disabled=!solutionViewer);
@@ -291,12 +311,14 @@ function goTo(next){
     }
     showErrors=true;renderErrors();jumpToRecovery(issues[0]);return;
   }
-  if(next>1)attemptedCalculation=true;stage=next;renderSolution();if(next===3)renderWork();window.scrollTo({top:0,behavior:'instant'});
+  if(next>1)attemptedCalculation=true;stage=next;if(next===1)renderInputVisuals();renderSolution();if(next===3)renderWork();window.scrollTo({top:0,behavior:'instant'});
   focusStage();
 }
 
+function restoreInstallationChoice(){const key=installationPanel.getSpec().selectedPlan;if(!key||params.basis!=='ports')return false;const comparison=compareRoutePlans(params),found=comparison.plans.find(p=>p.key===key);if(!found)return false;routePlans=comparison;activePlan=found.original?null:found;return true;}
 function invalidatePlans(){const had=routePlans!==null;routePlans=null;activePlan=null;planGeneration++;setOwnerSheetState(false,'先按「找接法建議」，再點選一個備選接法。');$('offset-plan-cards').replaceChildren();$('offset-plan-limits').hidden=true;$('compare-offset-plans').disabled=!result.context;$('offset-plan-status').textContent=had?'條件已變更，重新找接法後再比較。':'';}
 function render(keepChoice=false){
+  inputGapPlan=null;inputGapFailed=false;inputJointRecords=[];
   const key=keepChoice?activePlan?.key:null;result=computeOffset(params);baseline=originalView();setFlowOd(params.od);
   if(keepChoice&&routePlans){routePlans=compareRoutePlans(params);activePlan=key?routePlans.plans.find(p=>p.key===key)??null:null;renderPlans();}else invalidatePlans();
   syncVisibility();renderInputVisuals();
@@ -329,7 +351,7 @@ function useFit(round=false){$('fit-a').value=round?Math.round(result.elbows.a.a
 function preview(kind){
   try{requireOffsetReview(legacyReview);}catch(e){toast(e.message);$('offset-review').scrollIntoView({behavior:'smooth',block:'center'});return;}
   if(kind==='owner'){try{printTitle='業主比較單';printHTML=buildOwnerSheet({base:baseline?.valid&&!baseline.legacy?baseline:null,plan:activePlan,ctx:flowContext(),id});$('offset-preview-title').textContent=printTitle;$('offset-print-frame').srcdoc=printHTML;$('offset-preview').showModal();}catch(e){toast(e.message);}return;}
-  try{if(!workRoute()?.valid)throw new Error('先選可容納所有指定零件的接法，再列印加工單。');const paper=$('offset-paper').value,fit=fitResult();printTitle=kind==='strips'?'彎頭切角量尺':activePlan?activePlan.id+' 建議加工單':'偏移配管加工單';printHTML=kind==='strips'?buildOffsetStripPaper(result,id,paper):activePlan||baseline?.components?.length?buildRoutePlanWorkOrder(workRoute(),id,paper):buildOffsetWorkOrder(result,id,paper,fit.valid?fit:null);$('offset-preview-title').textContent=printTitle;$('offset-print-frame').srcdoc=printHTML;$('offset-preview').showModal();}catch(e){toast(e.message);}
+  try{if(!workRoute()?.valid)throw new Error('先選可容納所有指定零件的接法，再列印加工單。');const paper=$('offset-paper').value,fit=fitResult();printTitle=kind==='strips'?'彎頭切角量尺':activePlan?activePlan.id+' 建議加工單':'偏移配管加工單';printHTML=kind==='strips'?buildOffsetStripPaper(result,id,paper):activePlan||baseline?.components?.length?buildRoutePlanWorkOrder(workRoute(),id,paper,installationPanel.getSpec()):buildOffsetWorkOrder(result,id,paper,fit.valid?fit:null,installationPanel.getSpec());$('offset-preview-title').textContent=printTitle;$('offset-print-frame').srcdoc=printHTML;$('offset-preview').showModal();}catch(e){toast(e.message);}
 }
 function setView(next,reset=true){
   if(activePlan||baseline?.components?.length){
@@ -352,24 +374,43 @@ async function ensureViewer(){
   await viewerPromise;setView(view);updateStages();
 }
 
-function setEditor(next){editor=next;document.querySelectorAll('[data-editor-panel]').forEach(el=>el.hidden=el.dataset.editorPanel!==editor);document.querySelectorAll('[data-editor-tab]').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.editorTab===editor)));if(result){renderErrors();updateStages();}}
+function setEditor(next){if(next!==editor&&!inputGapFailed)inputPlanNotice='';editor=next;document.querySelectorAll('[data-editor-panel]').forEach(el=>el.hidden=el.dataset.editorPanel!==editor);document.querySelectorAll('[data-editor-tab]').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.editorTab===editor)));renderInputVisuals();if(result){renderErrors();updateStages();}}
+function renderInputJoints(plan){
+  const host=$('weld-sketch'),live=plan?.valid&&!plan.legacy?plan.joints??[]:[];if(live.length)inputJointRecords=live;const joints=live.length?live:inputJointRecords;
+  if(!joints.length){host.innerHTML='<p class="joint-scope-note">目前沒有可核對的接法。先填預設間隙，再查看可行接法；選好後會在左圖標出實際焊口。</p>';inputJointRendered=null;return;}
+  if(!joints.some(j=>j.id===inputJoint))inputJoint=joints[0].id;
+  if(!host.querySelector('.input-joint-editor'))host.innerHTML='<div class="input-joint-rail" role="group" aria-label="目前接法的接合口"></div><section class="input-joint-editor"><h4></h4><p class="joint-source"></p><label for="input-joint-value">接合預留 mm</label><input id="input-joint-value" data-input-gap type="number" step="any" inputmode="decimal"><small class="joint-shared"></small></section>';
+  host.querySelector('.input-joint-rail').innerHTML=joints.map(j=>`<button type="button" data-input-joint="${esc(j.id)}" aria-pressed="${j.id===inputJoint}"><strong>${esc(j.id)}<small>${j.kind==='bolt'?'螺栓':'焊口'}</small></strong><span>${fmt(jointGapTarget(j)?gapInputValue(params,jointGapTarget(j)):j.amount)} mm</span></button>`).join('');
+  const j=joints.find(j=>j.id===inputJoint),target=jointGapTarget(j),field=$('input-joint-value'),shared=target?joints.filter(x=>{const t=jointGapTarget(x);return t&&gapTargetKey(t)===gapTargetKey(target);}).map(x=>x.id):[];
+  host.querySelector('h4').textContent=j.id+' · '+(j.kind==='bolt'?'螺栓接合預留':'焊口間隙');host.querySelector('.joint-source').textContent=j.source.replace(/（G[1-4]）/g,'');field.disabled=!target;
+  document.querySelector('[data-editor-panel="gaps"]>h3').textContent=j.kind==='bolt'?'螺栓接合要預留多少？':'焊接要留多少？';
+  if(document.activeElement!==field||inputJointRendered!==inputJoint)field.value=(target?gapInputValue(params,target):j.amount)??'';
+  field.setAttribute('aria-invalid',String(!live.length));
+  host.querySelector('.joint-shared').textContent=shared.length>1?'共用同一設定：'+shared.join('、')+'，修改時一起重算。':j.kind==='bolt'?'此值為螺栓接合預留，不會跟著「統一焊口間隙」變更。':'依圖說／WPS 填寫；間隙會從成品管長扣除。';inputJointRendered=inputJoint;
+}
 function renderInputVisuals(){
   const ports=params.basis==='ports';document.querySelector('.port-scene-card').hidden=!ports;document.querySelector('.workflow-input-grid').classList.toggle('legacy-input',!ports);$('weld-sketch').hidden=!ports;
-  const scene=portScene(params,sceneView,selectedPort,dragState?.frame);sceneFrame=scene.frame;$('port-sketch').innerHTML=scene.svg;
+  const plan=workRoute(),joints=plan?.joints??inputJointRecords;if(!joints.some(j=>j.id===inputJoint))inputJoint=joints[0]?.id??null;
+  const scene=(editor!=='position'&&routeInputScene(plan,sceneView,inputJoint,editor))||portScene(params,sceneView,selectedPort,dragState?.frame);sceneFrame=scene.frame;$('port-sketch').innerHTML=scene.svg;
+  document.querySelector('.port-scene-card').dataset.sceneTask=editor;document.querySelector('.scene-heading h3').textContent=editor==='position'?'兩個管口，差在哪裡？':editor==='gaps'?'這個接法，焊口在哪裡？':'彎頭在接法中的位置';document.querySelector('.scene-heading>span').textContent=editor==='position'?'量測空間':plan?.valid?(plan.original?'原接法':plan.id)+' · '+plan.jointCount+' 焊口':'端口示意';
+  $('port-readouts').innerHTML=sceneReadouts(params)+(editor==='position'?`<div class="scene-port-controls">${['a','b'].map(end=>`<button type="button" data-endpoint="${end}" aria-pressed="${selectedPort===end}"><b>${end.toUpperCase()} 口</b><span>朝 ${esc(axisLabel(params[end+'Axis']))}</span><small>更改朝向 ↗</small></button>`).join('')}</div>`:'');
+  $('port-scene-context').textContent=inputPlanNotice||(editor==='position'?(params.datum==='marks'?'彩色線為量測標記點的 XYZ；管口已套用標記修正。':'彩色線對應 XYZ 距離；虛線為空間參考，不是管線。'):plan?.valid?(params.datum==='marks'?'已套用標記點修正。':'')+(editor==='gaps'?'點圖上圓點或焊口編號，直接填該口的接合預留。':'圖上為組立角度；供料設定填原件角度。'):'尚未選定可行接法，先依端口與供料條件試算。');
   document.querySelectorAll('[data-scene-view]').forEach(b=>{b.setAttribute('aria-pressed',String(b.dataset.sceneView===sceneView));b.disabled=params.layout==='planar'&&['top','side'].includes(b.dataset.sceneView);});
-  const axes=SCENE_VIEWS[sceneView].axes.map(k=>({run:'X',roll:'Y',rise:'Z'}[k])).join('／');$('port-scene-hint').textContent=`拖 B 粗調 ${axes} · 點尺寸精確輸入 · 點 A／B 選朝向`;
   const presets=[['facing','相向','x+','x-'],['corner','轉角','x+','z-'],['same','同向','x+','x+']];
   $('orientation-presets').hidden=!ports;$('endpoint-choices').hidden=!ports;$('direction-picker').hidden=!ports||selectedPort===null;
   $('orientation-presets').innerHTML=presets.map(([key,label,a,b])=>`<button type="button" class="visual-choice" data-orientation="${key}" aria-pressed="${params.aAxis===a&&params.bAxis===b}"><span class="orientation-icons">${directionIcon(a)}${directionIcon(b)}</span><span>${label}</span></button>`).join('');
   $('endpoint-choices').innerHTML=['a','b'].map(end=>`<button type="button" data-endpoint="${end}" aria-pressed="${selectedPort===end}">${end.toUpperCase()} 口 <span>${axisLabel(params[end+'Axis'])}</span> ✎</button>`).join('');
   if(selectedPort){$('direction-picker-title').textContent=selectedPort.toUpperCase()+' 口朝哪裡？';$('direction-options').innerHTML=[['x+','前'],['x-','後'],['y+','左'],['y-','右'],['z+','上'],['z-','下']].map(([value,label])=>`<button type="button" class="visual-choice" data-axis-choice="${value}" aria-pressed="${params[selectedPort+'Axis']===value}">${directionIcon(value)}<span>${label} ${axisLabel(value)}</span></button>`).join('')+'<button type="button" class="custom-axis" data-axis-choice="custom">斜向／填精確方向分量</button>';}
   for(const end of ['a','b']){const sketch=$('stock-sketch-'+end);if(sketch)sketch.innerHTML=stockElbowSVG(params,end);document.querySelectorAll(`[data-supply-kind][data-supply-end="${end}"]`).forEach(b=>b.setAttribute('aria-pressed',String(params[end+'Kind']===b.dataset.supplyKind&&(!b.dataset.donor||Number(b.dataset.donor)===params[end+'Donor']))));}
-  $('weld-sketch').innerHTML=weldSketchSVG(params);
+  renderInputJoints(plan);
+  inputScene.update({params,plan,task:editor,joint:inputJoint,port:selectedPort,active:stage===1&&ports});
 }
 function axisLabel(value){return value==='custom'?'自訂斜向':value?.length===2?value[1]+value[0].toUpperCase():'—';}
 function chooseEndpoint(end){selectedPort=end;setEditor('position');renderInputVisuals();}
 function focusDimension(key){setEditor('position');if(key==='roll'&&params.layout==='planar')return;const c=$('offset-'+key);if(c.hidden||c.closest('[hidden]'))return;c.focus();c.select();}
+function chooseInputJoint(value){inputJoint=value;setEditor('gaps');const c=$('input-joint-value');c?.focus({preventScroll:true});if(matchMedia('(max-width:720px)').matches)c?.scrollIntoView({block:'center',behavior:'smooth'});}
 function activateVisual(target){
+  const input=target.closest('[data-input-joint]');if(input){chooseInputJoint(input.dataset.inputJoint);return;}
   const port=target.closest('[data-port]');if(port){chooseEndpoint(port.dataset.port);return;}
   const dim=target.closest('[data-dimension]');if(dim){focusDimension(dim.dataset.dimension);return;}
   const supply=target.closest('[data-supply-field]');if(supply){setEditor('stock');const c=$('offset-'+supply.dataset.supplyField);const d=c?.closest('details');if(d)d.open=true;c?.focus();c?.select();return;}
@@ -378,29 +419,30 @@ function activateVisual(target){
 function renderPieceRail(){const plan=workRoute();$('piece-rail').innerHTML=(plan?.elements??[]).map(e=>`<button type="button" data-piece="${esc(e.id)}" aria-pressed="${piece===e.id}" aria-label="加工 ${esc(e.id)} ${esc(partName(e))}">${e.type==='component'?componentIcon(e.kind):e.type==='pipe'?'<svg viewBox="0 0 76 62" aria-hidden="true"><path d="M13 38h50" stroke="currentColor" stroke-width="15"/></svg>':elbowIcon(e.angle)}<span>${esc(e.id)}</span><small>${e.type==='elbow'?fmt(e.angle,2)+'°':esc(partName(e))}</small></button>`).join('');}
 function choosePiece(value,open=false){piece=value;selected=0;if(open)goTo(3);else{renderPieceRail();$('cut-end').value=piece;renderCut();}setView(activePlan||baseline?.components?.length?piece:['A','B'].includes(piece)?piece.toLowerCase():'offset');}
 $('offset-nps').innerHTML=ASME_PIPE_SIZES.map(p=>`<option value="${esc(p.nps)}">${esc(p.nps)} 吋</option>`).join('')+'<option value="custom">實測外徑</option>';
-let restored=false;try{const saved=localStorage.getItem(storageKey);if(saved){const data=readOffsetProject(saved);params=data.params;id=data.id;legacyReview=data.review??[];setMedium(data.medium);restored=true;}}catch{projectDraft.protectSaved();}
+let restored=false;try{const saved=localStorage.getItem(storageKey);if(saved){const data=readOffsetProject(saved);params=data.params;id=data.id;legacyReview=data.review??[];installationPanel.load(data.installation);setMedium(data.medium);restored=true;}}catch{projectDraft.protectSaved();}
 const phoneLayout=matchMedia('(max-width:720px)');
 $('job-material-details').open=!phoneLayout.matches;
 phoneLayout.addEventListener('change',event=>$('job-material-details').open=!event.matches);
 initFlowPanel($('offset-flow'),{onChange:()=>{if(routePlans?.valid)renderPlans();saveDraft();},onOwnerSheet:()=>preview('owner')});
-syncInputs();$('offset-references').innerHTML=referencesHTML();render();$('project-restored').textContent=restored?'已恢復上次尺寸。':'專案儲存在這台裝置。';
+syncInputs();$('offset-references').innerHTML=referencesHTML();render(restoreInstallationChoice());$('project-restored').textContent=restored?'已恢復上次尺寸。':'專案儲存在這台裝置。';
 $('offset-inputs').addEventListener('submit',e=>{e.preventDefault();nextWorkflow();});
 $('offset-inputs').addEventListener('input',e=>{
   if(e.target.id==='offset-same-stock'){sharedStock=e.target.checked;if(sharedStock)copySupply();render();return;}
-  if(e.target.id==='offset-all-gap'){for(const k of gapKeys()){params[k]=number(e.target.value);$('offset-'+k).value=e.target.value;}render();return;}
+  if(e.target.id==='offset-all-gap'){const previous=activePlan;for(const target of gapTargets())params=withGapInput(params,target,number(e.target.value));renderGapChange(previous);return;}
+  if(e.target.hasAttribute('data-input-gap')){const previous=activePlan,j=(workRoute()?.joints??inputJointRecords).find(j=>j.id===inputJoint),target=jointGapTarget(j);if(target){params=withGapInput(params,target,number(e.target.value));renderGapChange(previous);}return;}
   if(!e.target.name)return;readInputs();const name=e.target.name;if(name==='stations'){render(true);return;}
   if(['aKind','bKind','aRadiusMethod','bRadiusMethod'].includes(name))elbowFields(name[0]);
   if(name==='basis'){elbowFields('a');elbowFields('b');toast('量測基準已切換，請重新核對尺寸。');}
   if(sharedStock&&name.startsWith('a')&&supplyKeys.some(k=>name==='a'+k))copySupply();
   if(name==='od'){$('offset-nps').value=nps();elbowFields('a');elbowFields('b');}
-  render();
+  if(/Gap$/.test(name)){renderGapChange(activePlan);return;}inputPlanNotice='';render();
 });
 $('offset-nps').addEventListener('change',()=>{const size=ASME_PIPE_SIZES.find(p=>p.nps===$('offset-nps').value);if(size){params.od=size.odMm;$('offset-od').value=params.od;elbowFields('a');elbowFields('b');render();}else $('offset-od').focus();});
 $('offset-inputs').addEventListener('click',e=>{const b=e.target.closest('[data-radius-end]');if(b){const end=b.dataset.radiusEnd,r=nominalElbowRadius(nps(),'lr');if(r!==null){params[end+'Radius']=r;params[end+'RadiusMethod']='radius';elbowFields(end);if(sharedStock&&end==='a')copySupply();render();}}});
 $('offset-plans').addEventListener('input',e=>{if(e.target.name){readInputs();render();}});
 $('offset-plans').addEventListener('toggle',()=>{if($('offset-plans').open&&!routePlans)comparePlans();});
 $('compare-offset-plans').addEventListener('click',comparePlans);
-$('offset-plan-cards').addEventListener('click',e=>{const b=e.target.closest('[data-plan]');if(!b)return;activePlan=b.dataset.plan==='original'?null:routePlans?.plans.find(p=>p.id===b.dataset.plan)??null;piece='P1';selected=0;renderPlans();renderSolution();renderWork();focusStage();});
+$('offset-plan-cards').addEventListener('click',e=>{const b=e.target.closest('[data-plan]');if(!b)return;inputGapPlan=null;inputGapFailed=false;inputPlanNotice='';inputJointRecords=[];chooseView='overview';$('offset-plans').open=false;activePlan=b.dataset.plan==='original'?null:routePlans?.plans.find(p=>p.id===b.dataset.plan)??null;piece='P1';selected=0;renderPlans();renderSolution();renderWork();saveDraft();focusStage();});
 $('cut-station-count').addEventListener('input',()=>{params.stations=number($('cut-station-count').value);$('offset-stations').value=params.stations;render(true);});
 for(const b of document.querySelectorAll('[data-step]'))b.addEventListener('click',()=>goTo(Number(b.dataset.step)));
 for(const b of document.querySelectorAll('[data-edit-inputs]'))b.addEventListener('click',()=>goTo(1));
@@ -413,22 +455,19 @@ $('workflow-model').addEventListener('toggle',()=>{if($('workflow-model').open)e
 document.querySelector('.offset-view-tabs').addEventListener('click',event=>{const b=event.target.closest('[data-view]');if(!b)return;if(b.dataset.view!=='offset'){piece=activePlan||baseline?.components?.length?b.dataset.view:b.dataset.view.toUpperCase();$('cut-end').value=piece;selected=0;renderPieceRail();renderCut();}setView(b.dataset.view);});
 $('reset-offset-view').addEventListener('click',()=>viewer?.fit());
 document.addEventListener('click',event=>{
+  const task=event.target.closest('[data-choose-view]');if(task){setChooseView(task.dataset.chooseView);document.querySelector('.choose-task-nav').scrollIntoView({block:'start',behavior:'instant'});return;}
   const add=event.target.closest('[data-add-component]'),edit=event.target.closest('[data-edit-component]');if(add){if(params.basis!=='ports'){toast('先切換成既有端口量測模式，再指定零件。');return;}openComponentEditor(add.dataset.addComponent||null);}else if(edit)openComponentEditor(null,edit.dataset.editComponent);
   else if(event.target.closest('[data-component-search]'))exploreOtherRoutes();
   else if(event.target.closest('[data-component-joint-limit]')){params.planMaxJoints=Number(event.target.closest('[data-component-joint-limit]').dataset.componentJointLimit);$('offset-planMaxJoints').value=params.planMaxJoints;syncVisibility();renderComponentPanel();comparePlans();saveDraft();}
 });
-$('component-cancel').addEventListener('click',()=>$('component-editor').close());
-$('component-kind-options').addEventListener('click',event=>{const button=event.target.closest('[data-component-kind]');if(!button)return;readComponentDraft();componentDraft.kind=button.dataset.componentKind;componentDraft.internalBolts=componentDraft.kind==='flangePair'?1:0;$('component-internalBolts').value=componentDraft.internalBolts;renderComponentDraft();});
-$('component-form').addEventListener('input',()=>{readComponentDraft();renderComponentDraft();$('component-form-error').hidden=true;});
-$('component-form').addEventListener('submit',event=>{event.preventDefault();readComponentDraft();const next=[...params.components.filter(c=>c.id!==componentDraft.id),{...componentDraft}],errors=validateComponents(next);if(errors.length){$('component-form-error').hidden=false;$('component-form-error').textContent=errors.join(' ');$('component-length').focus();return;}applyComponents(next);});
-$('component-remove').addEventListener('click',()=>applyComponents(params.components.filter(c=>c.id!==componentDraft.id)));
 document.querySelector('.solution-view-tabs').addEventListener('click',event=>{const button=event.target.closest('[data-solution-view]');if(!button)return;solutionView=button.dataset.solutionView;syncSolutionViewer();});
 document.querySelector('.solution-view-tools').addEventListener('click',event=>{
   const button=event.target.closest('[data-solution-motion]');if(!button||!solutionViewer)return;
   const action=button.dataset.solutionMotion;
-  if(action==='spin'){const spin=button.getAttribute('aria-pressed')!=='true';solutionViewer.setAutoRotate(spin);button.setAttribute('aria-pressed',String(spin));button.textContent=spin?'暫停旋轉':'自動旋轉';}
+  if(action==='spin'){const spin=button.getAttribute('aria-pressed')!=='true';solutionViewer.setAutoRotate(spin);button.setAttribute('aria-pressed',String(spin));button.innerHTML=uiIcon(spin?'pause':'rotate')+'<span>'+(spin?'暫停旋轉':'自動旋轉')+'</span>';}
   else if(action==='reset'){stopSolutionSpin();solutionViewer.fit();}else solutionViewer.zoom(action==='in'?.8:1.25);
 });
+for(const b of document.querySelectorAll('[data-solution-motion]')){const action=b.dataset.solutionMotion;b.innerHTML=uiIcon(({spin:'rotate',in:'plus',out:'minus',reset:'reset'})[action])+(action==='in'||action==='out'?'':'<span>'+b.textContent+'</span>');}
 $('solution-viewer').addEventListener('keydown',event=>{
   if(!solutionViewer||stage!==2)return;const angles={ArrowLeft:[-.18,0],ArrowRight:[.18,0],ArrowUp:[0,-.18],ArrowDown:[0,.18]};
   if(angles[event.key]){event.preventDefault();stopSolutionSpin();solutionViewer.orbit(...angles[event.key]);}
@@ -437,17 +476,17 @@ $('solution-viewer').addEventListener('keydown',event=>{
 for(const k of ['fit-a','fit-b','fit-length'])$(k).addEventListener('input',renderFit);
 $('fit-use-plan').addEventListener('click',()=>useFit());$('fit-round').addEventListener('click',()=>useFit(true));
 $('offset-paper').addEventListener('change',updatePaper);$('offset-id').addEventListener('input',()=>{id=$('offset-id').value;saveDraft();});
-$('save-offset').addEventListener('click',()=>{try{download(offsetProjectJSON(params,id,getMedium(),legacyReview),'application/json',fileID()+'.offset.json');}catch(e){toast(e.message);}});
+$('save-offset').addEventListener('click',()=>{try{download(offsetProjectJSON(params,id,getMedium(),legacyReview,installationPanel.getSpec()),'application/json',fileID()+'.offset.json');}catch(e){toast(e.message);}});
 $('load-offset').addEventListener('click',()=>$('offset-file').click());
-$('offset-file').addEventListener('change',async()=>{const file=$('offset-file').files[0];if(!file)return;try{if(file.size>100000)throw new Error('專案檔案過大。');const data=readOffsetProject(await file.text());params=data.params;id=data.id;legacyReview=data.review??[];setMedium(data.medium);piece='P1';selected=0;stage=1;editor='position';attemptedCalculation=false;showErrors=false;setEditor('position');syncInputs();render();toast('已載入，先核對現場尺寸。');}catch(e){toast('載入失敗：'+e.message);}$('offset-file').value='';});
-$('offset-csv').addEventListener('click',()=>{try{requireOffsetReview(legacyReview);download(activePlan||baseline?.components?.length?routePlanCSV(workRoute()):offsetCSV(result),'text/csv;charset=utf-8',fileID()+(activePlan?'.'+activePlan.id:'')+'.csv');}catch(e){toast(e.message);}});
+$('offset-file').addEventListener('change',async()=>{const file=$('offset-file').files[0];if(!file)return;try{if(file.size>100000)throw new Error('專案檔案過大。');const data=readOffsetProject(await file.text());params=data.params;id=data.id;legacyReview=data.review??[];installationPanel.load(data.installation);chooseView='overview';setMedium(data.medium);piece='P1';selected=0;stage=1;editor='position';attemptedCalculation=false;showErrors=false;setEditor('position');syncInputs();render(restoreInstallationChoice());toast('已載入，先核對現場尺寸。');}catch(e){toast('載入失敗：'+e.message);}$('offset-file').value='';});
+$('offset-csv').addEventListener('click',()=>{try{requireOffsetReview(legacyReview);download(activePlan||baseline?.components?.length?routePlanCSV(workRoute(),installationPanel.getSpec()):offsetCSV(result,installationPanel.getSpec()),'text/csv;charset=utf-8',fileID()+(activePlan?'.'+activePlan.id:'')+'.csv');}catch(e){toast(e.message);}});
 $('print-offset-strips').addEventListener('click',()=>preview('strips'));
 $('close-offset-preview').addEventListener('click',()=>$('offset-preview').close());
 $('download-offset-print').addEventListener('click',()=>download(printHTML,'text/html;charset=utf-8',fileID()+'.'+printTitle+'.html'));
 $('print-offset-preview').addEventListener('click',()=>{const f=$('offset-print-frame');f.contentWindow.focus();f.contentWindow.print();});
 
 for(const b of document.querySelectorAll('[data-editor-tab]'))b.addEventListener('click',()=>setEditor(b.dataset.editorTab));
-for(const b of document.querySelectorAll('[data-scene-view]'))b.addEventListener('click',()=>{sceneView=b.dataset.sceneView;renderInputVisuals();});
+for(const b of document.querySelectorAll('[data-scene-view]'))b.addEventListener('click',()=>{sceneView=b.dataset.sceneView;renderInputVisuals();inputScene.setView(sceneView);});
 $('offset-inputs').addEventListener('click',event=>{
  const t=event.target,b=t.closest('button');
  if(t.closest('#port-sketch')&&Date.now()<suppressPortClick)return;
@@ -464,7 +503,7 @@ $('close-direction-picker').addEventListener('click',()=>{selectedPort=null;rend
 function sceneCoords(event,svg){return new DOMPoint(event.clientX,event.clientY).matrixTransform(svg.getScreenCTM().inverse());}
 const sketch=$('port-sketch');
 sketch.addEventListener('pointerdown',event=>{
- if(event.button!==0||!event.target.closest('[data-port=b]')||params.basis!=='ports')return;
+ if(event.button!==0||editor!=='position'||!event.target.closest('.scene-port[data-port=b]')||params.basis!=='ports')return;
  const svg=sketch.querySelector('svg'),point=sceneCoords(event,svg);dragState={pointer:event.pointerId,start:[point.x,point.y],values:{run:params.run,roll:params.roll,rise:params.rise},frame:sceneFrame,moved:false,latest:null};sketch.setPointerCapture(event.pointerId);event.preventDefault();
 });
 function applySceneDrag(){if(!dragState?.latest)return;const delta=sceneDragDelta(dragState.latest,dragState.frame);for(const [key,value]of Object.entries(delta)){params[key]=Math.round((dragState.values[key]??0)+value);$('offset-'+key).value=params[key];}render();}

@@ -9,6 +9,7 @@ export const STATUS_LABELS=Object.freeze({ok:'正常',reference:'估算／參考
 export function cardVisual(card,r,{padNozzle=null,print=false}={}){
   const which=card.fieldScope;
   switch(card.visual){
+    case 'detail-register':return `<div class="tank-method-empty">支承已改用分件明細；${print?esc(card.detailAssembly)+' 分件與焊道見 BOM 表':`<button type="button" data-open-fabrication="${esc(card.detailAssembly)}">查看 ${esc(card.detailAssembly)} 分件與焊道 ↗</button>`}</div>`;
     case 'rolling':return V.rollingVisual(r);
     case 'flat':return V.flatVisual(r,which);case 'splice':return V.spliceVisual(r,which);case 'cone':return V.coneVisual(r,which);case 'petal':return V.petalVisual(r,which);case 'formed':return V.formedVisual(r,which);
     case 'pad':{const pads=r.attachments.pads.items,men=r.attachments.manholes.items;
@@ -59,7 +60,7 @@ export function methodCSVRows(r){
   const cards=methodCatalog(r),pr=r.process,att=r.attachments,rows=[];if(!cards.length)return rows;
   rows.push([],['製作工法','狀態','結論']);for(const c of cards)rows.push([c.title,STATUS_LABELS[c.status],c.summary]);
   for(const c of cards)for(const w of c.warnings??[])rows.push(['工法提醒：'+c.title,w.text]);
-  if(att?.bom.length){rows.push([],['附件材料','規格','數量','單位','單重 kg','重量 kg','長度 mm']);for(const b of att.bom)rows.push([b.name,b.spec,b.qty,b.unit,b.each,b.weight,b.length??'']);rows.push(['附件合計 kg',att.weight],['空槽估重 kg',att.emptyWeight]);}
+  if(att?.bom.length){rows.push([],['附件材料','規格','數量','單位','單重 kg','重量 kg','長度 mm']);for(const b of att.bom)rows.push([b.name,b.spec,b.qty,b.unit,b.each,b.weight,b.length??'']);rows.push(['附件合計 kg',att.weight],[r.incompleteFabrication?'已計重量 kg':'空槽估重 kg',att.emptyWeight]);}
   if(!pr)return rows;
   const w=pr.weld;rows.push([],['焊縫','類別','型式','板厚／腳長 mm','長度 mm','熔敷金屬 kg','焊材 kg','焊法','焊材效率']);
   for(const s of w.seams)rows.push([s.name,s.category,s.kind==='butt'?`${s.groove.type} 對接`:'角焊',s.kind==='butt'?s.t:s.leg,s.length,s.metal,s.consumable,PROCESS_LABELS[s.process],s.efficiency]);
@@ -77,8 +78,8 @@ export function methodCSVRows(r){
   if(s.paint){rows.push(['塗裝面積 m²',s.paint.area]);for(const coat of s.paint.coats)rows.push(['塗層：'+coat.name,coat.dft+' μm',coat.liters+' L']);}
   if(s.insulation)rows.push(['保溫體積 m³',s.insulation.volume],['外包鋁皮 m²',s.insulation.cladding],['保溫支撐環 圈',s.insulation.rings]);
   rows.push([],['液位 mm','容積 m³','%']);for(const x of pr.strapping.rows)rows.push([x.level,x.volume,x.percent]);rows.push(['使用液位 mm',pr.strapping.working.level,pr.strapping.working.volume]);
-  const e=pr.erection;rows.push([],['製作安裝方式',{shop:'工廠整槽',bottomup:'現場正裝',jacking:'倒裝（液壓頂升）',airlift:'倒裝（充氣頂升）'}[e.method]],['運送尺寸 長×寬×高 mm',`${e.envelope.length.toFixed(0)} × ${e.envelope.width.toFixed(0)} × ${e.envelope.height.toFixed(0)}`],['空槽重 kg',e.envelope.weight],['最重單片 kg',e.maxPiece]);
+  const e=pr.erection;rows.push([],['製作安裝方式',{shop:'工廠整槽',bottomup:'現場正裝',jacking:'倒裝（液壓頂升）',airlift:'倒裝（充氣頂升）'}[e.method]],['運送尺寸 長×寬×高 mm',`${e.envelope.length.toFixed(0)} × ${e.envelope.width.toFixed(0)} × ${e.envelope.height.toFixed(0)}`],[r.incompleteFabrication?'已計部分重量 kg（非整槽）':'空槽重 kg',e.envelope.weight],['最重單片 kg',e.maxPiece]);
   if(e.jacks)rows.push(['頂升機 台',e.jacks.count]);if(e.air)rows.push(['充氣壓力 kPa',e.air.pressure]);for(const st of e.stages)rows.push(['安裝階段',st.label,st.weight??'']);
-  rows.push(['重心（空槽）mm',pr.cg.empty.y,pr.cg.axis],['重心（操作）mm',pr.cg.operating.y]);
+  rows.push(['重心（空槽）mm',r.incompleteFabrication?'待完整資料':pr.cg.empty.y,pr.cg.axis],['重心（操作）mm',r.incompleteFabrication?'待完整資料':pr.cg.operating.y]);
   return rows;
 }

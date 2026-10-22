@@ -1,3 +1,4 @@
+import {shellCourses} from './tank-shell-layout.js';
 // Fabrication process estimates: weld inventory and consumables, NDE quantities, dimensional tolerances, testing,
 // surface treatment, erection / transport, level–volume table and centre of gravity. Planning values only.
 import {G,liquidDensity,endSurfaceArea,insulationEstimate} from './tank-attachments.js';
@@ -16,7 +17,7 @@ const JOINT_GROUP={A:'A 類（縱縫／封頭內焊縫）',B:'B 類（環縫）'
 /** Every weld seam of the estimate with its category, joint type and length. */
 export function weldInventory(r,att){
   const p=r.input,ts=p.shellThickness,seams=[],add=(name,group,category,kind,size,length,extra={})=>{if(length>0)seams.push({name,group,category,kind,t:kind==='butt'?size:undefined,leg:kind==='fillet'?size:undefined,length,...extra});};
-  add('筒身縱縫','shell','A','butt',ts,r.verticalSeams*r.courseHeight,{count:r.verticalSeams});
+  add('筒身縱縫','shell','A','butt',ts,r.assembly.reduce((sum,b)=>sum+b.height,0),{count:r.verticalSeams});
   add('筒身環縫','shell','B','butt',ts,r.horizontalSeams*r.circumference,{count:r.horizontalSeams});
   const hasCurb=r.methods.rings.some(x=>x.purpose==='curb');
   for(const which of ['bottom','top']){
@@ -36,6 +37,8 @@ export function weldInventory(r,att){
       if(lap)add('中幅板－環形邊板搭接','end','底','fillet',end.t,2*PI*(layout.innerRadius+layout.centre.lap),{lap:true});else add('中幅板－環形邊板對接','end','底','butt',Math.min(end.t,layout.thickness),2*PI*layout.innerRadius);}
   }
   for(const n of r.nozzlePlan?.items??[]){
+    if(r.fabricationPlan?.owners.has(n.id))continue;
+    if(n.construction==='integral')continue; // Source-specific neck / transition welds are not known.
     add(`${n.id} 接管－${n.host==='shell'?'筒壁':'端部'}`,'nozzle','D','fillet',Math.min(n.thickness,n.hostThickness),2*PI*n.od,{nozzle:n.id});
     if(n.end==='wn')add(`${n.id} 法蘭對焊`,'nozzle','C','butt',n.thickness,PI*n.od,{nozzle:n.id});
     if(n.end==='so')add(`${n.id} 法蘭平焊（內＋外）`,'nozzle','C','fillet',n.thickness,2*PI*n.od,{nozzle:n.id});
@@ -43,6 +46,7 @@ export function weldInventory(r,att){
   // Attachment fillets follow the welding setting: the chosen leg, else the thinner part capped at 12 mm.
   const legSetting=r.methods.welding.filletLeg;
   for(const w of att?.welds??[])add(w.name,'attachment','附',w.kind,w.kind==='butt'?w.t:legSetting>0?legSetting:Math.min(w.leg,12),w.length);
+  for(const w of r.fabricationPlan?.welds??[])if(r.fabricationPlan.valid&&w.ready)seams.push({...w,name:w.id+' '+(w.name||w.a+' → '+w.b)});
   return seams;
 }
 export function weldPlan(r,att){
@@ -50,7 +54,7 @@ export function weldPlan(r,att){
   const eff=(process,override)=>override>0?override:PROCESS_EFFICIENCY[process];
   for(const seam of seams){
     const groove=seam.kind==='butt'?grooveFor(seam.t,w):null,area=groove?groove.area:filletArea(seam.leg);
-    const process=seam.kind==='butt'?w.buttProcess:w.filletProcess,efficiency=eff(process,seam.kind==='butt'?w.buttEfficiency:w.filletEfficiency);
+    const process=seam.process&&seam.process!=='inherit'?seam.process:seam.kind==='butt'?w.buttProcess:w.filletProcess,efficiency=eff(process,seam.source==='detail'&&seam.process!=='inherit'?0:seam.kind==='butt'?w.buttEfficiency:w.filletEfficiency);
     Object.assign(seam,{groove,area,metal:area*seam.length*rho/1e9,process,efficiency});seam.consumable=seam.metal/efficiency;
   }
   const by=key=>Object.values(seams.reduce((acc,s)=>{const k=s[key];(acc[k]??={key:k,length:0,metal:0,consumable:0}).length+=s.length;acc[k].metal+=s.metal;acc[k].consumable+=s.consumable;return acc;},{}));
@@ -64,6 +68,7 @@ export function apiSpots(length,each){if(!(length>0))return 0;const rest=Math.ma
 function ndePlan(r,seams){
   const p=r.input,m=r.methods.inspection,code=p.code,E=Number(p.efficiency),eSet=String(p.efficiency??'').trim()!=='';
   let mode=m.rt;
+  if(mode==='drawing')return {mode,modeLabel:p.referenceCase==='v1102-drawing-study'?'原圖 RT 20% MIN · 範圍待確認':'依圖說記錄 · 範圍待確認',spots:null,films:null,rtLength:null,detail:['原圖／檢驗計畫的比例、焊縫範圍、焊工涵蓋與加照規則需另確認，不折算成 UW-52 抽查處數。'],notes:['目前只記錄原圖檢驗要求，尚未建立可執行的 ITP；不自動宣告檢驗範圍或合格。'],pt:null,ptNote:''};
   if(mode==='auto')mode=code==='api650'?'api650':code==='asme'?(eSet?(E>=1?'full':E>=.85?'spot':'none'):'spot'):'none';
   const butt=seams.filter(s=>s.kind==='butt'&&['A','B'].includes(s.category)),length=butt.reduce((s,x)=>s+x.length,0),notes=[];
   const nozzles=(r.nozzlePlan?.items??[]).length;
@@ -71,7 +76,7 @@ function ndePlan(r,seams){
   if(mode==='full'){rtLength=length;films=Math.ceil(length/300);detail.push(`A／B 類對接縫全長 RT ${(length/1000).toFixed(1)} m`);}
   if(mode==='spot'){spots=length>0?Math.ceil(length/15000):0;detail.push(`A／B 類對接縫共 ${(length/1000).toFixed(1)} m：每 15 m 或其餘數 1 處 → ${spots} 處`);rtLength=spots*150;films=spots;notes.push('ASME UW-52(b)：每座容器每 15 m（50 ft）焊縫或其餘數抽 1 處，每處至少 150 mm；另需涵蓋每位焊工的焊縫，不合格須加照 2 處追蹤。');}
   if(mode==='api650'){
-    const t=p.shellThickness,vert=r.verticalSeams*r.courseHeight,horiz=r.horizontalSeams*r.circumference,junctions=r.courses>1?2*r.panelsPerCourse*(r.courses-1):0,lowest=r.panelsPerCourse;
+    const t=p.shellThickness,vert=r.assembly.reduce((sum,b)=>sum+b.height,0),horiz=r.horizontalSeams*r.circumference,junctions=shellCourses(r).slice(1).reduce((s,c,i)=>s+c.pieces.length+shellCourses(r)[i].pieces.length,0),lowest=shellCourses(r)[0].pieces.length;
     if(t>25){rtLength+=vert;films+=Math.ceil(vert/300);detail.push(`縱縫全長 RT（板厚 > 25 mm）`);spots+=junctions;detail.push(`T 形交會 ${junctions} 處全照`);}
     else{const v=apiSpots(vert,30000);spots+=v;detail.push(`縱縫 ${v} 處（首 3 m 一處、其後每 30 m 一處）`);
       if(t>10){spots+=junctions+2*lowest;detail.push(`板厚 10～25 mm：T 形交會 ${junctions} 處全照；最下圈每道縱縫 2 處（${2*lowest}）`);}else{spots+=lowest;detail.push(`最下圈每道縱縫加 1 處隨機（${lowest}）`);}}
@@ -161,7 +166,8 @@ function endCentroid(end){
 }
 export function centreOfGravity(r,att){
   const f=r.frame,items=[],vertical=r.orientation==='vertical';
-  items.push({name:'筒身',mass:r.parts.find(x=>x.id==='S').netWeight,y:f.bodyBottom+r.bodyHeight/2});
+  const shellArea=r.assembly.reduce((sum,b)=>sum+b.length*b.height,0),shellCenter=r.assembly.reduce((sum,b)=>sum+b.length*b.height*(b.z+b.height/2),0)/shellArea;
+  items.push({name:'筒身',mass:r.parts.find(x=>x.id==='S').netWeight,y:f.bodyBottom+shellCenter});
   const endMass=which=>r.parts.filter(x=>x.ends?.includes(which)).reduce((s,x)=>s+x.netWeight/x.ends.length,0)+r.parts.filter(x=>!x.ends&&x.id!=='S'&&x.id.startsWith(which==='bottom'?'B':'T')).reduce((s,x)=>s+x.netWeight,0);
   items.push({name:'下端',mass:endMass('bottom'),y:f.bottomTangent-endCentroid(r.ends.bottom)},{name:'上端',mass:endMass('top'),y:f.topTangent+endCentroid(r.ends.top)});
   for(const n of r.nozzlePlan?.items??[])items.push({name:n.id,mass:n.pipeWeight+(n.end==='bare'?0:n.flangeWeight),y:(n.pipeStart[1]+n.face[1])/2});
@@ -204,9 +210,9 @@ export function vesselReach(r,att){
 }
 export function erectionPlan(r,att,surface){
   const p=r.input,e=r.methods.erection,out={method:e.method,warnings:[],stages:[]},vertical=r.orientation==='vertical';
-  const courseWeight=r.parts[0].netWeight/r.courses,roof=r.parts.filter(x=>(x.ends??[]).includes('top')||x.id.startsWith('T')).reduce((s,x)=>s+x.netWeight/((x.ends?.length)||1),0)+(att?.rings.items.filter(x=>x.purpose==='curb').reduce((s,x)=>s+x.weight,0)??0);
+  const courseWeights=shellCourses(r).map(c=>c.pieces.reduce((sum,b)=>sum+b.length*b.height*p.shellThickness*p.density/1e9,0)),roof=r.parts.filter(x=>(x.ends??[]).includes('top')||x.id.startsWith('T')).reduce((s,x)=>s+x.netWeight/((x.ends?.length)||1),0)+(att?.rings.items.filter(x=>x.purpose==='curb').reduce((s,x)=>s+x.weight,0)??0);
   const pieces=[...r.parts,...(r.attachmentParts??[])].flatMap(part=>part.pieces?part.pieces.map(x=>x.blankWeight??0):Array.from({length:part.quantity},()=>part.kind==='formed'?part.unitWeight??0:(part.blankWeight??0)/part.quantity));
-  out.maxPiece=Math.max(0,...pieces);
+  out.maxPiece=Math.max(0,...pieces,...(r.detailPlateParts??[]).map(p=>Number.isFinite(p.blankWeight)?p.blankWeight/p.quantity:0));
   // Radial envelope: shell + insulation and every outward projection (only finite values; a support plan with an issue adds none).
   const insulation=surface?.insulation?.thickness??0,reach=vesselReach(r,att);
   const acc=att?.access?.geometry??{},push=(name,v)=>{if(Number.isFinite(v))reach.push([name,v]);};
@@ -217,18 +223,19 @@ export function erectionPlan(r,att,surface){
   out.envelope={width:2*radial,height:vertical?2*radial:2*radial+(r.methods.supports.type==='saddles'?r.methods.supports.clearance:0),length:vertical?r.totalHeight+(['legs','skirt'].includes(r.methods.supports.type)?(r.methods.supports.type==='legs'?r.methods.supports.clearance:Math.max(0,(att?.supports?.geometry?.height??0)-r.frame.bottomTangent)):0):r.totalHeight,weight:att?.emptyWeight??r.netWeight,governing,radial};
   if(e.method==='shop'){
     const over=[['寬',out.envelope.width,e.transportWidth],['高',out.envelope.height,e.transportHeight],['長',out.envelope.length,e.transportLength]].filter(([,v,limit])=>v>limit);
-    out.transport={over:over.map(([name,v,limit])=>({name,value:v,limit})),fits:!over.length};
+    out.transport={over:over.map(([name,v,limit])=>({name,value:v,limit})),geometryFits:!over.length,fits:r.incompleteFabrication?null:!over.length,assessed:!r.incompleteFabrication};
+    if(r.incompleteFabrication)out.warnings.push('接件／附件重量與完整外包尚未建立，不判定可整槽運送；已計重量與部分重心不可作施工吊運依據。');
     const access=governing.filter(x=>['直梯','直梯護籠','平台','盤梯'].includes(x));
     if(over.length)out.warnings.push(`整槽運送超出可運尺寸：${over.map(([name,v,limit])=>`${name} ${v.toFixed(0)} > ${limit} mm`).join('、')}${governing.length&&over.some(([name])=>name!=='長')?`（寬度由${governing.join('、')}外伸決定）`:''}；${access.length?`${access.join('、')}可改現場安裝，或`:''}改現場組立、分段運送。`);
     out.stages=['下料與捲板','組立筒身','組立端部','接管與附件','焊接與檢驗','試壓','表面處理','裝車運送'].map(label=>({label}));
   }
-  if(e.method==='bottomup'){out.stages=[{label:'鋪底板',weight:r.parts.filter(x=>(x.ends??[]).includes('bottom')||x.id.startsWith('B')).reduce((s,x)=>s+x.netWeight/((x.ends?.length)||1),0)},...Array.from({length:r.courses},(_,i)=>({label:`第 ${i+1} 圈`,weight:courseWeight})),{label:'頂部',weight:roof}];out.notes='由下往上逐圈吊裝，需外側腳手架或爬升平台；吊車依最重單片選用。';}
+  if(e.method==='bottomup'){out.stages=[{label:'鋪底板',weight:r.parts.filter(x=>(x.ends??[]).includes('bottom')||x.id.startsWith('B')).reduce((s,x)=>s+x.netWeight/((x.ends?.length)||1),0)},...Array.from({length:r.courses},(_,i)=>({label:`第 ${i+1} 圈`,weight:courseWeights[i]})),{label:'頂部',weight:roof}];out.notes='由下往上逐圈吊裝，需外側腳手架或爬升平台；吊車依最重單片選用。';}
   if(e.method==='jacking'||e.method==='airlift'){
     if(!vertical)out.warnings.push('倒裝法用於立式現場組立槽。');
     if(r.endTypes.top==='open')out.warnings.push('開口槽沒有頂部可頂升；倒裝前需先裝頂部或加臨時頂圈。');
     // Top course and roof are built at ground level; each lift raises everything above the next course to be added.
-    const stages=[{label:`地面組立第 ${r.courses} 圈＋頂部`,weight:0,course:r.courses}];let lifted=roof+courseWeight;
-    for(let k=r.courses-1;k>=1;k--){stages.push({label:`頂升後裝第 ${k} 圈`,weight:lifted,course:k});lifted+=courseWeight;}
+    const stages=[{label:`地面組立第 ${r.courses} 圈＋頂部`,weight:0,course:r.courses}];let lifted=roof+courseWeights.at(-1);
+    for(let k=r.courses-1;k>=1;k--){stages.push({label:`頂升後裝第 ${k} 圈`,weight:lifted,course:k});lifted+=courseWeights[k-1];}
     out.stages=stages;const max=Math.max(0,...stages.map(s=>s.weight));out.maxLift=max;
     if(r.courses<2)out.warnings.push('只有 1 圈筒身，倒裝法不需頂升。');
     if(e.method==='jacking'){const byLoad=Math.ceil(max*e.jackFactor/(e.jackCapacity*1000)),bySpacing=Math.ceil(PI*r.od/e.jackSpacing);out.jacks={byLoad,bySpacing,count:Math.max(3,byLoad,bySpacing),capacity:e.jackCapacity,factor:e.jackFactor};}
@@ -248,12 +255,13 @@ export function blankCut(piece,trim,kind){
 }
 export function cuttingPlan(r,att,weld){
   const p=r.input,c=r.methods.cutting,rows=[],trim=p.trim;
-  for(const part of [...r.parts,...(r.attachmentParts??[])]){
+  for(const part of [...r.parts,...(r.attachmentParts??[]),...(r.detailPlateParts??[])]){
     if(part.kind==='formed')continue;
     let length=0,contours=0,pieces=0;
     if(part.pieces)for(const piece of part.pieces){const cut=blankCut(piece,trim);length+=cut.outer+cut.holes;contours+=cut.contours;pieces++;}
     else if(part.kind==='circle'){const d=part.blankDiameter||part.width;length=PI*d*part.quantity;contours=pieces=part.quantity;}
     else{length=2*(part.width+part.height)*part.quantity;contours=pieces=part.quantity;}
+    if(part.group==='fabrication'){const row=r.fabricationPlan.parts.find(x=>x.id===part.id),inner=row.kind==='ring'&&row.idiameter>0?Math.PI*row.idiameter:row.kind==='plate'&&row.holeDiameter>0?Math.PI*row.holeDiameter*(row.holeCount??0):0;length+=inner*part.quantity;contours+=(row.kind==='ring'&&row.idiameter>0?1:row.kind==='plate'?row.holeCount??0:0)*part.quantity;}
     rows.push({id:part.id,name:part.name,t:part.thickness,pieces,contours,length});
   }
   // Openings cut into the shell and ends after rolling / forming (nozzle holes, sump hole).
@@ -272,10 +280,11 @@ export function cuttingPlan(r,att,weld){
   // jacket pipes once per stock length used (half-pipes are also split lengthwise, counted with the pipes).
   const pieces=group=>(group?.bom??[]).filter(b=>b.length>0).reduce((s,b)=>s+b.qty,0),jg=att?.jacket?.geometry??{},stock=r.methods.jacket.stockLength;
   const jacketPipes=att?.jacket?.type==='halfpipe'?Math.ceil(jg.length/(2*stock)):att?.jacket?.type==='coil'?Math.ceil(jg.length/stock):0;
-  const bars=pieces(att?.access)+pieces(att?.supports)+(att?.rings.items??[]).reduce((s,x)=>s+(x.segments??0),0)+jacketPipes,pipeEnds=2*(r.nozzlePlan?.items.length??0);
+  const bars=pieces(att?.access)+pieces(att?.supports)+(att?.rings.items??[]).reduce((s,x)=>s+(x.segments??0),0)+jacketPipes,pipeEnds=2*(r.nozzlePlan?.items.filter(n=>n.cutReady).length??0);
   const out={method:c.method,rows,holes,total,pierces,bevel,bevelLength,bars,pipeEnds,notes:[]};
   if(c.speed>0){out.cutHours=total/c.speed/60+(c.pierce>0?pierces*c.pierce/3600:0);}
   if(c.bevel!=='cut'&&c.bevelSpeed>0)out.bevelHours=bevelLength/c.bevelSpeed/60;
+  if(r.detailPlateParts?.some(p=>r.fabricationPlan.parts.find(x=>x.id===p.id)?.kind==='profile'))out.notes.push('分件異形毛坯按已確認矩形包絡估初切；實際曲線、孔槽與成形後修邊依詳圖另計。');
   out.notes.push('切割長度以每件下料外框（含留料）加內孔估；沿用原板邊或共邊切割可再扣除，成形後修邊另計。');
   if(c.bevel==='cut')out.notes.push('同步斜割時坡口邊以斜割速度計（通常比直割慢），依機台切割表。');
   const stainless=r.methods.heat.material==='ss'||/SUS|STS|304|316|不鏽|不銹/i.test(String(p.material??''));

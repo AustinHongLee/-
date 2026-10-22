@@ -1,3 +1,5 @@
+import {shellBatchLabel} from './tank-shell-layout.js';
+import {stockFor} from './tank-stock-config.js';
 // Method catalog: one card per fabrication topic with a one-line conclusion, status, key numbers, cut list and notes.
 // Normal results stay quiet; only issues, warnings and missing choices raise the status.
 import {END_LABELS,FORMED_ENDS,equalAreaBlank,formingStrain} from './tank-heads.js';
@@ -15,7 +17,7 @@ function endCard(r,which){
   if(type==='flat'){
     const fd=r.od+2*r.input.overhang;card.title=horizontal?where+'平板':which==='bottom'?'平底板':'平蓋';card.glyph='flat';
     if(!layout){card.summary=`整片圓板 Ø${fmt(fd,0)} × t${fmt(end.t)}`;card.visual='flat';card.metrics.unshift(metric('成品直徑',fmt(fd,0),'mm'),metric('下料直徑',fmt(fd+2*r.input.trim,0),'mm'));
-      const fits=fd+2*r.input.trim<=Math.min(r.input.stockWidth,r.input.stockLength);if(!fits)card.warnings.push({level:'error',text:`Ø${fmt(fd+2*r.input.trim,0)} 放不進原板，改用拼板`,action:'splice'});}
+      const board=stockFor(r.input,r.input.material,r.ends[which].t,r.input.density),fits=fd+2*r.input.trim<=Math.min(board.stockWidth,board.stockLength);if(!fits)card.warnings.push({level:'error',text:`Ø${fmt(fd+2*r.input.trim,0)} 放不進原板，改用拼板`,action:'splice'});}
     else if(layout.method==='strips'){card.summary=`${layout.plates.length} 片拼接（整板 ${layout.full}、異形 ${layout.sketch}）`;card.visual='splice';card.metrics.unshift(metric('拼板片數',String(layout.plates.length),'片'),metric('焊縫',fmt(layout.weldLength/1000,1),'m'));}
     else{card.summary=`環形邊板 ${layout.ring.pieces.length} 片＋中幅板 ${layout.centre.plates.length} 片`;card.visual='splice';card.metrics.unshift(metric('環形邊板',String(layout.ring.pieces.length),'片'),metric('中幅板',String(layout.centre.plates.length),'片'));}
     const splice=layout?.method==='annular'?layout.centre:layout;
@@ -64,7 +66,7 @@ export function methodCatalog(r){
   const cards=[],att=r.attachments,pr=r.process,m=r.methods,p=r.input;
   // Shell rolling.
   const s=r.parts[0],strain=formingStrain(p.shellThickness,r.meanDiameter/2,'single'),shell={id:'shell',title:'筒身捲板',glyph:'shell',stages:['cut','form','assemble','weld'],groups:['rolling'],staticFields:'shell',visual:'rolling',warnings:[],notes:[],bom:[]};
-  shell.summary=`${r.courses} 圈 × ${r.panelsPerCourse} 片 · 下料 ${fmt(s.width,0)} × ${fmt(s.height,0)}`;
+  shell.summary=shellBatchLabel(r)+(r.shellLayoutState?.custom?' · 逐片尺寸見筒身加工單':` · 下料 ${fmt(s.width,0)} × ${fmt(s.height,0)}`);
   shell.metrics=[metric('中面周長',fmt(r.circumference,1),'mm'),metric('每片成品',`${fmt(s.finishedWidth,0)} × ${fmt(s.finishedHeight,0)}`,'mm'),metric('成形率',fmt(strain,2),'%',{alert:strain>5})];
   const rollWidth=s.height,mr=m.rolling;
   if(mr.machineWidth>0&&rollWidth>mr.machineWidth)shell.warnings.push({level:'warn',text:`板寬 ${fmt(rollWidth,0)} mm 超過捲板機有效寬 ${fmt(mr.machineWidth,0)} mm${p.shellLayout==='upright'?'（直立分片需長輥）':''}`});
@@ -84,6 +86,7 @@ export function methodCatalog(r){
   };
   const sup=att.supports;
   optional('supports','支撐','support','supports',sup,{on:sup.type!=='none',extra:sup.loads?{metrics:[metric({saddles:'每座操作',skirt:'裙座總承載',legs:'每支操作',lugs:'每只操作',anchors:'每組操作'}[sup.type]??'每處操作',fmt(sup.loads.operating,1),'kN'),metric('試水',fmt(sup.loads.test,1),'kN',{quiet:true})]}:{}});
+  if(r.fabricationPlan?.owners.has('support')){const card=cards[cards.length-1],a=r.fabricationPlan.data.assemblies.find(a=>a.target==='support');Object.assign(card,{optional:false,active:true,groups:[],visual:'detail-register',summary:`${a.id} ${a.name} · ${a.qty} 組（分件明細取代概算）`,bom:r.fabricationPlan.parts.filter(p=>p.target==='support').map(p=>({name:p.id+' '+p.name,spec:p.spec,qty:p.quantity,unit:p.unit,weight:p.weight})),notes:[...sup.notes,'修改套數、分件與焊道請到「分件與 BOM」。'],detailAssembly:a.id});}
   if(sup.type==='none'&&sup.warnings.length)cards[cards.length-1].warnings.push(...sup.warnings.map(text=>({level:'warn',text,action:'supports'})));
   optional('rings','加強圈','ring','rings',att.rings,{on:att.rings.items.length>0,summary:att.rings.items.map(x=>x.id+' '+x.spec).join('、'),visual:'rings'});
   optional('access','梯台','ladder','access',att.access,{on:att.access.summary!=='未加梯台',visual:'access'});
@@ -105,7 +108,7 @@ export function methodCatalog(r){
     if(m.heat.material==='other'&&m.heat.pwht==='auto')heatCard.warnings.push({level:'info',text:'其他材質：請依 WPS 決定是否 PWHT，再把「焊後熱處理」改為要做或不做'});
     cards.push(heatCard);
     const t=pr.test,tol=pr.tolerances,nde=w.nde,inspect={id:'inspection',title:'檢驗試驗',glyph:'inspect',stages:['inspect'],groups:['inspection'],visual:'inspection',warnings:[],bom:[],notes:[...nde.notes,...t.notes]};
-    inspect.summary=[t.hydro?`盛水 ${fmt(t.water,1)} m³`:'',nde.spots?`RT ${nde.spots} 處`:nde.rtLength?`RT ${fmt(nde.rtLength/1000,1)} m`:'',t.vacuumCount?`真空箱 ${t.vacuumCount} 次`:''].filter(Boolean).join(' · ')||'記錄量測方法';
+    inspect.summary=[nde.mode==='drawing'?nde.modeLabel:'',t.hydro?`盛水 ${fmt(t.water,1)} m³`:'',nde.spots?`RT ${nde.spots} 處`:nde.rtLength?`RT ${fmt(nde.rtLength/1000,1)} m`:'',t.vacuumCount?`真空箱 ${t.vacuumCount} 次`:''].filter(Boolean).join(' · ')||'記錄量測方法';
     inspect.metrics=[metric('公差依據',tol.basisLabel,''),metric('射線檢驗',nde.modeLabel,''),...(t.hydro?[metric('試水',fmt(t.waterMass/1000,1),'t'),metric('灌水',fmt(t.fillHours,1),'h',{quiet:true})]:[])];
     if(p.code==='unknown')inspect.warnings.push({level:'info',text:'尚未指定規範：公差與射線檢驗只列量測方法',action:'codes'});
     cards.push(inspect);
@@ -113,8 +116,8 @@ export function methodCatalog(r){
     cards.push({id:'surface',title:'表面處理／保溫',glyph:'paint',stages:['surface'],groups:['surface'],visual:'surface',summary:[sf.paint?`塗裝 ${fmt(sf.paint.area,0)} m² · ${fmt(sf.paint.liters,0)} L`:'',sf.insulation?`保溫 ${fmt(sf.insulation.volume,1)} m³`:'',sf.pickling?`酸洗 ${fmt(sf.pickling.area,0)} m²`:''].filter(Boolean).join(' · ')||`外表面 ${fmt(sf.outside,0)} m²（未選塗裝）`,metrics:[metric('外表面',fmt(sf.outside,1),'m²'),metric('內表面',fmt(sf.inside,1),'m²')],warnings:[],bom:[],notes:sf.notes});
     cards.push({id:'level',title:'液位容積',glyph:'level',stages:['inspect'],groups:[],visual:'level',summary:`使用 ${fmt(p.fill)}% → 液位 ${fmt(pr.strapping.working.level,0)} mm`,metrics:[],warnings:[],bom:[],notes:['液位由槽內最低點（臥式為筒底）起算，含端部容積；未扣內件與內凸管嘴。']});
     const er=pr.erection,cg=pr.cg;
-    cards.push({id:'erection',title:'吊運安裝',glyph:'ship',stages:['ship'],groups:['erection'],visual:'erection',summary:er.method==='shop'?`空重 ${fmt(er.envelope.weight/1000,2)} t · ${er.transport?.fits?'可整槽運送':'超出可運尺寸'}`:er.jacks?`倒裝 · 頂升機 ${er.jacks.count} 台`:er.air?`充氣頂升 ${fmt(er.air.pressure,2)} kPa`:'正裝法逐圈吊裝',
-      metrics:[metric('空槽重',fmt(er.envelope.weight/1000,2),'t'),metric('重心',fmt(cg.empty.y,0),'mm',{note:cg.axis}),metric('最重單片',fmt(er.maxPiece,0),'kg',{quiet:true})],warnings:er.warnings.map(text=>({level:'warn',text})),bom:[],notes:[`重心${cg.axis} ${fmt(cg.empty.y,0)} mm（空槽）／${fmt(cg.operating.y,0)} mm（操作）。`,er.notes??''].filter(Boolean)});
+    cards.push({id:'erection',title:'吊運安裝',glyph:'ship',stages:['ship'],groups:['erection'],visual:'erection',summary:r.incompleteFabrication?'完整重量／外包待補 · 不作運送判定':er.method==='shop'?`空重 ${fmt(er.envelope.weight/1000,2)} t · ${er.transport?.fits?'可整槽運送':'超出可運尺寸'}`:er.jacks?`倒裝 · 頂升機 ${er.jacks.count} 台`:er.air?`充氣頂升 ${fmt(er.air.pressure,2)} kPa`:'正裝法逐圈吊裝',
+      metrics:[metric(r.incompleteFabrication?'已計重量':'空槽重',fmt(er.envelope.weight/1000,2),'t'),metric('重心',r.incompleteFabrication?'待完整資料':fmt(cg.empty.y,0),r.incompleteFabrication?'':'mm',{note:cg.axis}),metric('最重單片',fmt(er.maxPiece,0),'kg',{quiet:true})],warnings:er.warnings.map(text=>({level:'warn',text})),bom:[],notes:[r.incompleteFabrication?'接件、盲蓋及支承等資料尚未完整，整槽重量、重心與施工載荷尚未確定。':`重心${cg.axis} ${fmt(cg.empty.y,0)} mm（空槽）／${fmt(cg.operating.y,0)} mm（操作）。`,er.notes??''].filter(Boolean)});
   }
   for(const card of cards){
     if(['heat','inspection'].includes(card.id)){
@@ -124,14 +127,14 @@ export function methodCatalog(r){
       card.notes.unshift('規範條文目前未依輸入版次切換規則；版次、適用範圍、材料與 WPS 須另行核對。');
     }
     if(['supports','lifting'].includes(card.id)&&card.active){card.reference=true;card.notes.unshift('只估靜力荷重分配，尚未核對重心偏載、支座／吊耳強度、局部應力與施工吊裝程序。');}
-    card.status=card.warnings.some(w=>w.level==='error')?'error':card.warnings.some(w=>w.level==='warn')?'warn':card.optional&&!card.active?'off':card.reference?'reference':'ok';}
+    if(r.incompleteFabrication&&['cutting','welding','supports','lifting','surface','erection'].includes(card.id)){card.reference=true;card.warnings.unshift({level:'warn',text:'重量、焊道與施工資料未齊；只列已計部分，完整外包與重心仍待核。'});}card.status=card.warnings.some(w=>w.level==='error')?'error':card.warnings.some(w=>w.level==='warn')?'warn':card.optional&&!card.active?'off':card.reference?'reference':'ok';}
   return cards;
 }
 /** Overview strip: one number per fabrication stage. */
 export function stageSummary(r,cards){
   if(!r?.valid)return [];
   const all=[...r.parts,...(r.attachmentParts??[])],pieces=all.reduce((s,p)=>s+(p.kind==='formed'?0:p.quantity),0)+(r.nozzlePlan?.items.length??0),pr=r.process,att=r.attachments;
-  const formed=r.courses*r.panelsPerCourse+all.filter(p=>['sector','petal'].includes(p.kind)).reduce((s,p)=>s+p.quantity,0)+(att?.rings.items.length??0)+(att?.pads.items.filter(x=>x.rollRadius).length??0);
+  const formed=r.assembly.length+all.filter(p=>['sector','petal'].includes(p.kind)).reduce((s,p)=>s+p.quantity,0)+(att?.rings.items.length??0)+(att?.pads.items.filter(x=>x.rollRadius).length??0);
   const attached=cards.filter(c=>c.optional&&c.active).length,issues=id=>cards.filter(c=>c.stages.includes(id)&&['warn','error'].includes(c.status)).length;
   const value={cut:`${pieces} 件`,form:`${formed} 件`,assemble:`${r.courses} 圈＋端部`,weld:pr?`${fmt(pr.weld.totals.length/1000,0)} m`:'—',attach:attached?`${attached} 項`:'未加',inspect:pr?(pr.weld.nde.spots?`RT ${pr.weld.nde.spots}`:pr.test.hydro?'盛水':'量測'):'—',surface:pr?.surface.paint?`${fmt(pr.surface.paint.area,0)} m²`:'未選',ship:`${fmt((r.emptyWeight??r.netWeight)/1000,2)} t`};
   return STAGES.map(([id,label])=>({id,label,value:value[id],issues:issues(id)}));

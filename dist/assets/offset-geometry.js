@@ -43,7 +43,7 @@ export function elbowCutStations(radius,od,angle,count=12,donor=90) {
 
 export function computeOffset(raw={}) {
   const p={...DEFAULT_OFFSET,...raw}, errors=[];
-  const componentErrors=validateComponents(p.components);
+  const componentErrors=validateComponents(p.components,p.od);
   if(componentErrors.length)return {valid:false,params:p,errors:componentErrors.map(message=>({field:'components',message,code:'input'}))};
   if(p.components.length&&p.basis!=='ports')return {valid:false,params:p,errors:[{field:'basis',message:'指定閥／法蘭請使用既有端口量測模式。',code:'input'}]};
   if(p.basis==='ports')return computePortOffset(p,elbowCutStations);

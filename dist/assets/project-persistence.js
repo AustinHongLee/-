@@ -34,7 +34,11 @@ export function mountDraftPersistence({key,name}){
   const label=document.createElement('span'),backup=document.createElement('button'),replace=document.createElement('button'),original=document.createElement('button');
   backup.type=replace.type=original.type='button';backup.textContent='下載 JSON 備份';original.textContent='下載載入前原檔';replace.textContent='以本頁覆蓋瀏覽器版本';replace.hidden=original.hidden=true;
   root.append(label,backup,original,replace);document.querySelector('.workbench-nav').after(root);
-  function render(){const s=store.state;root.dataset.state=s.kind;label.textContent=s.message;backup.disabled=!store.draft;original.hidden=s.kind!=='recovery'||store.original===null;replace.hidden=!['conflict','recovery'].includes(s.kind)||!store.draft;backup.textContent=s.kind==='dirty'?'下載最後有效專案':s.kind==='recovery'?'下載本頁專案':'下載 JSON 備份';backup.title=s.kind==='dirty'?'下載本頁最後可保存的有效專案；未完成的尺寸不在此檔':'另存專案檔供換裝置或回復使用';}
+  const projectMenu=document.querySelector('header .project-menu,header .tank-project'),projectItems=projectMenu?.querySelector(':scope>div'),badge=document.createElement('span');badge.className='project-save-state';projectMenu?.querySelector(':scope>summary')?.append(badge);
+  function render(){const s=store.state;root.dataset.state=s.kind;label.textContent=s.message;backup.disabled=!store.draft;original.hidden=s.kind!=='recovery'||store.original===null;replace.hidden=!['conflict','recovery'].includes(s.kind)||!store.draft;backup.textContent=s.kind==='dirty'?'下載最後有效專案':s.kind==='recovery'?'下載本頁專案':'下載 JSON 備份';backup.title=s.kind==='dirty'?'下載本頁最後可保存的有效專案；未完成的尺寸不在此檔':'另存專案檔供換裝置或回復使用';
+    badge.textContent=s.kind==='saved'?'已保存':s.kind==='idle'?'':'待處理';
+    if(projectItems&&['saved','idle'].includes(s.kind))projectItems.append(root);else document.querySelector('.workbench-nav').after(root);
+  }
   backup.addEventListener('click',()=>{if(!store.draft)return;const blob=new Blob([store.draft],{type:'application/json;charset=utf-8'}),url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download=name+'.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);});
   original.addEventListener('click',()=>{if(store.original===null)return;const url=URL.createObjectURL(new Blob([store.original],{type:'application/json;charset=utf-8'})),a=document.createElement('a');a.href=url;a.download=name+'-載入前原檔.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);});
   replace.addEventListener('click',()=>{if(store.draft){store.write(store.draft,{overwrite:true});render();}});

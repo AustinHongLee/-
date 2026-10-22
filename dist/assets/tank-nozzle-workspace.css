@@ -1,0 +1,136 @@
+/* Nozzle editing: a selected item, one short task and a relevant diagram. */
+.tank-nozzle-rail{margin:0 0 16px;padding:0;border-bottom:1px solid #e2ebe5}
+.tank-page [data-tank-panel=nozzles]>.tank-section-heading{margin-bottom:10px}
+.tank-nozzle-rail .tank-nozzle-list{display:flex;flex-wrap:nowrap;overflow-x:auto;overscroll-behavior-x:contain;gap:8px;padding:4px 2px 12px;margin:0}
+.tank-nozzle-rail .tank-nozzle-list button{flex:none;min-width:156px;padding:10px 14px;border-radius:11px;border:1px solid #d9e5de;background:#fbfdfb;color:#54796c}
+.tank-nozzle-rail .tank-nozzle-list button[aria-pressed=true]{border-color:#69a98e;background:#eaf5ee;color:#246b54;box-shadow:inset 3px 0 #4f967b}
+.tank-nozzle-rail .tank-nozzle-list small{font-size:11px;line-height:1.5}
+.tank-nozzle-grid{grid-template-columns:minmax(0,.95fr) minmax(0,1fr);gap:30px;align-items:start}
+.tank-nozzle-context{background:#f6faf6;border:1px solid #e0eae2;border-radius:15px;padding:18px;min-width:0}
+.tank-nozzle-context-caption{display:flex;align-items:center;justify-content:space-between;gap:12px;color:#537869;font-size:13px;margin-bottom:8px}
+.tank-nozzle-context-caption button{border:0;background:transparent;color:#54927a;font-size:11px;padding:7px 0;min-height:36px}
+.tank-nozzle-context .tank-nozzle-location svg{margin:0;max-height:295px}
+.tank-nozzle-context #tank-flange-diagram svg{margin:0;max-height:265px}
+.tank-nozzle-context .tank-flange-shortcuts{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin:6px 0 14px}
+.tank-nozzle-context .tank-flange-shortcuts button{min-width:0;min-height:52px;background:#fff;border:1px solid #dbe8de;border-radius:9px;padding:8px 10px;text-align:left;color:#759083;font-size:11px}
+.tank-nozzle-context .tank-flange-shortcuts strong{display:block;font-size:14px;color:#397e63;margin-top:3px}
+.tank-nozzle-context .tank-flange-shortcuts strong span{float:right;color:#86a796;font-size:12px}
+.tank-nozzle-context .tank-nozzle-readback{background:#eaf3ed;border-radius:10px;padding:12px;font-size:13px;color:#4a7963}
+.tank-nozzle-context .tank-nozzle-readback p{font-size:12px;line-height:1.65;margin-top:5px}
+.tank-nozzle-context .tank-nozzle-readback p:empty{display:none}
+.tank-nozzle-note-list{margin-top:10px;font-size:11px;color:#9d8351}
+.tank-nozzle-note-list summary{cursor:pointer;padding:6px 0;line-height:1.5}
+.tank-nozzle-mobile-view{border:1px solid #dce7dc;background:#f7faf4;border-radius:10px;margin:0 0 16px;min-width:0}
+.tank-nozzle-mobile-view>summary{display:flex;align-items:center;justify-content:space-between;gap:10px;list-style:none;cursor:pointer;padding:12px;font-size:12px;color:#62866b;min-height:46px}
+.tank-nozzle-mobile-view>summary::-webkit-details-marker{display:none}
+.tank-nozzle-mobile-view>.tank-nozzle-context{position:static!important;border:0;border-top:1px solid #e4ece0;border-radius:0;padding:12px}
+.tank-nozzle-context .tank-nozzle-cut{margin-top:14px}
+.tank-nozzle-context .tank-nozzle-cut .tank-nozzle-readback{background:#fff;border:1px solid #e0e9e0}
+.tank-nozzle-overview{margin-top:16px;color:#7b9586;font-size:12px}
+.tank-nozzle-overview summary{cursor:pointer;padding:8px 0}
+.tank-nozzle-overview #tank-nozzle-summary{font-size:12px;margin-top:8px}
+.tank-nozzle-context #tank-nozzle-3d{width:100%;margin-top:12px;background:transparent;border:1px solid #d9e6db;color:#5f8d76;font-size:12px;min-height:42px}
+#tank-nozzle-editor{min-width:0}
+#tank-nozzle-editor .tank-part-head{margin-bottom:16px;gap:12px}
+#tank-nozzle-editor .tank-part-head h4{font-size:17px;font-weight:600;color:#365d50}
+#tank-nozzle-editor .tank-part-head [data-nozzle-remove]{font-size:11px;padding:7px 10px;min-height:36px;color:#8a938a;border-color:#e0e7de;border-radius:8px}
+.tank-nozzle-task-nav{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));padding:4px;background:#edf3ed;border:1px solid #e5ece3;border-radius:12px;margin-bottom:20px;gap:4px}
+.tank-nozzle-task-nav button{min-width:0;min-height:44px;padding:8px 4px;border:0;background:transparent;border-radius:9px;color:#7f9485}
+.tank-nozzle-task-nav strong{font-size:14px;font-weight:500;display:block}
+.tank-nozzle-task-nav small{display:none}
+.tank-nozzle-task-nav button[aria-pressed=true]{background:#fff;color:#236e51;box-shadow:0 2px 7px #264b3510}
+.tank-nozzle-task-nav button[aria-pressed=true] strong{font-weight:600}
+.tank-nozzle-task-nav button[aria-pressed=true] small{color:#75a38a}
+#tank-nozzle-editor .tank-nozzle-name{margin-top:0;margin-bottom:16px}
+.tank-nozzle-shared{padding:13px;background:#f6f9f4;border:1px solid #e3ebdf;border-radius:10px;margin:0 0 20px;gap:12px}
+#tank-nozzle-editor [data-nozzle-pane]>.tank-fields{margin:14px 0;gap:14px}
+#tank-nozzle-editor .tank-nozzle-hosts{gap:6px;margin:14px 0}
+#tank-nozzle-editor .tank-nozzle-hosts button{font-size:12px;min-height:42px;padding:8px 10px;border-radius:9px}
+#tank-nozzle-editor .tank-flange-config{border:0;margin:0;padding:0}
+#tank-nozzle-editor .tank-flange-config h5{font-size:13px;margin:0 0 10px;color:#718d7d}
+#tank-nozzle-editor .tank-flange-choices{gap:8px;margin-bottom:20px}
+#tank-nozzle-editor .tank-flange-choices button{display:flex;flex-direction:column;align-items:center;min-height:88px;padding:8px;border-radius:12px;border-color:#d9e5dc;color:#748c7c;transition:background .15s,border-color .15s}
+#tank-nozzle-editor .tank-flange-choices button[aria-pressed=true]{background:#eaf5ed;border-color:#66a687;color:#2d7958;box-shadow:inset 0 0 0 1px #66a687}
+#tank-nozzle-editor .tank-flange-choices svg{height:39px;width:68px}
+#tank-nozzle-editor .tank-flange-choices strong{font-size:13px}
+#tank-nozzle-editor .tank-flange-choices small{font-size:10px;margin-top:3px}
+.tank-flange-mode{display:flex;padding:4px;gap:4px;background:#f0f4ee;border-radius:9px;margin-bottom:10px}
+.tank-flange-mode button{flex:1;min-width:0;min-height:40px;border:0;background:transparent;border-radius:7px;color:#8a9b8b;padding:8px 4px;font-size:12px}
+.tank-flange-mode button[aria-pressed=true]{background:#fff;color:#2a7956;font-weight:600;box-shadow:0 2px 6px #304d3510}
+#tank-flange-current{font-size:11px;color:#7b9483;margin-bottom:16px;line-height:1.6}
+#tank-flange-current[data-state=reference]{color:#4d8b68}
+#tank-flange-current[data-state=stale]{background:#fff4e1;color:#aa7737;padding:8px 10px;border-radius:7px}
+.tank-flange-quick-row{display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;margin-top:9px}
+.tank-flange-quick-row>div{display:flex;gap:5px}
+.tank-flange-quick-row button{font-size:11px;min-height:32px;padding:5px 10px;background:#fff;border:1px solid #d8e6db;color:#7c9883;border-radius:18px}
+.tank-flange-quick-row [aria-pressed=true]{background:#e8f3e9;border-color:#a4c8ae;color:#3d8357}
+#tank-flange-spec-details{margin-top:14px}
+#tank-flange-spec-details summary,#tank-flange-manual-spec summary,#tank-flange-dimensions summary{font-size:12px;color:#5f826a;line-height:1.6}
+#tank-flange-spec-details summary>span,#tank-flange-manual-spec summary>span,#tank-flange-dimensions summary>span{display:block;font-size:10px;color:#92a18f;font-weight:400;margin:2px 0 0 13px}
+.tank-flange-reference-card{margin-top:16px;padding:13px 14px;background:#f6f9f2;border:1px solid #e4ecdf;border-radius:11px;color:#7d9275;font-size:12px}
+.tank-flange-reference-card[data-state=applied]{background:#eff7ee;border-color:#dcebd8}
+.tank-flange-reference-values{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
+.tank-flange-reference-values>span{font-size:10px;color:#81947c}
+.tank-flange-reference-values strong{display:block;margin-top:5px;font-size:19px;font-weight:500;color:#3d7852;font-variant-numeric:tabular-nums}
+.tank-flange-reference-values strong small{display:inline;font-size:10px;margin-left:3px;color:#81947c}
+.tank-flange-reference-card>p{font-size:10px;margin-top:10px;line-height:1.6}
+.tank-flange-reference-card>small{font-size:10px;line-height:1.6}
+#tank-flange-apply{width:100%;margin-top:9px;min-height:42px;border:1px solid #a8ccad;background:#edf6eb;border-radius:9px;color:#3a7a4d;font-size:12px}
+#tank-flange-apply:disabled{opacity:1;color:#88a382;background:#f6f9f2;border-color:#e2ebdc}
+#tank-flange-catalog-controls>.tank-note{font-size:10px;margin-top:8px;color:#95a18a}
+.tank-flange-joint-fields{margin-top:18px;gap:14px}
+[data-nozzle-pane=flange]>.tank-nozzle-shared{margin-top:18px}
+#tank-flange-dimensions{margin-top:18px}
+#tank-flange-dimensions .tank-flange-primary{margin:14px 0;gap:14px}
+#tank-flange-pipe-match{margin:14px 0;padding:12px;border-radius:9px;font-size:12px}
+#tank-flange-pipe-match .tank-secondary{min-height:38px;font-size:11px;padding:7px 10px;margin-top:9px}
+.tank-nozzle-task-nav button:focus-visible,.tank-flange-mode button:focus-visible,.tank-flange-choices button:focus-visible{outline:3px solid #76b19a;outline-offset:3px}
+@media(max-width:800px){
+  .tank-nozzle-grid{display:flex;flex-direction:column;gap:18px}
+  .tank-nozzle-grid>#tank-nozzle-editor{order:0;width:100%}
+  .tank-nozzle-grid>.tank-nozzle-context{order:1;width:100%;position:static}
+  .tank-nozzle-grid[data-nozzle-task=position]>.tank-nozzle-context{order:0}
+  .tank-nozzle-grid[data-nozzle-task=position]>#tank-nozzle-editor{order:1}
+  .tank-nozzle-context .tank-nozzle-location svg{max-height:250px;min-height:0}
+  .tank-nozzle-context .tank-flange-shortcuts{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .tank-nozzle-context #tank-flange-diagram svg{min-height:0;max-height:240px}
+  .tank-nozzle-rail{margin-bottom:14px}
+  .tank-nozzle-rail .tank-nozzle-list button{min-width:145px;font-size:13px}
+  .tank-nozzle-task-nav{margin-bottom:14px}
+  .tank-nozzle-shared{padding:10px;gap:10px;margin-bottom:16px}
+  #tank-nozzle-editor .tank-flange-choices button{min-height:90px;padding:6px 3px}
+  #tank-nozzle-editor .tank-flange-choices svg{height:40px;width:62px}
+  #tank-nozzle-editor .tank-flange-choices strong{font-size:12px}
+  #tank-nozzle-editor .tank-flange-choices small{font-size:9px}
+  #tank-nozzle-editor .tank-part-head h4{font-size:15px}
+  .tank-flange-reference-values strong{font-size:17px}
+}
+
+/* Position is read in two views, without a label for every other nozzle. */
+.tank-nozzle-build{margin-top:26px;padding-top:22px;border-top:1px solid #dbe7df}.tank-nozzle-build>header{margin-bottom:16px}.tank-nozzle-build>header>span{font-size:12px;color:#78a08b}.tank-nozzle-build h5{margin:7px 0 0;font-size:16px;line-height:1.7;color:#315f4d;font-weight:600}.tank-nozzle-build .tank-nozzle-shared{padding:0;border:0;background:transparent;margin:16px 0 12px}.tank-nozzle-build .tank-fields{gap:12px}.tank-nozzle-build .tank-details{margin:12px 0 16px;padding-top:10px}.tank-nozzle-build .tank-details>summary{font-size:12px;min-height:38px;padding:7px 0;line-height:1.6}.tank-nozzle-follow{display:flex;flex-direction:row;align-items:center;gap:8px;color:#648672;font-size:12px;line-height:1.6;margin:16px 0 7px}.tank-nozzle-follow input{width:18px;height:18px;margin:0;flex:none;accent-color:#2a7855}.tank-nozzle-build #tank-nozzle-build-note{font-size:11px;line-height:1.7;color:#83968a;margin:7px 0 16px}.tank-nozzle-build #tank-nozzle-quick-spec-title{display:block;color:#4c7960;font-size:13px;font-weight:500;margin-top:5px}
+.tank-nozzle-context .tank-nozzle-build-action{width:100%;min-height:44px;padding:10px 14px;margin:0 0 18px;border:1px solid #bad4c4;border-radius:10px;background:#eaf4ed;color:#276747;font:inherit;font-size:13px;font-weight:600;cursor:pointer}
+.tank-nozzle-next{width:100%;min-height:46px;margin-top:14px;padding:11px 16px;background:#f3f8f3;border:1px solid #cfdfd0;border-radius:10px;color:#467d55;font:inherit;font-size:13px;cursor:pointer}.tank-nozzle-next:disabled{opacity:.5;cursor:default}
+.tank-nozzle-position-memory{padding:11px 12px;margin:0 0 12px;border-radius:9px;background:#edf5ef;color:#638472;font-size:12px;line-height:1.8}
+.tank-nozzle-build-preview{display:inline-flex;align-items:center;min-height:40px;margin-top:9px;padding:8px 11px;border:1px solid #d5e3d8;border-radius:8px;background:#fff;color:#6b9177;font:inherit;font-size:12px;cursor:pointer}
+.nozzle-map-build-summary{display:flex;align-items:center;gap:10px;width:100%;padding:11px;margin:0 0 12px;min-height:58px;border:1px solid #d8e7dc;border-radius:10px;background:#fff;color:#547c64;text-align:left;font:inherit;cursor:pointer}.tank-nozzle-context .nozzle-location-focus .nozzle-map-build-summary>svg{width:46px;height:34px;flex:none}.nozzle-map-build-summary>span:nth-child(2){flex:1;min-width:0}.nozzle-map-build-summary strong{display:block;font-size:12px;line-height:1.6;font-weight:600}.nozzle-map-build-summary small{display:block;font-size:11px;line-height:1.6;color:#88a08e;margin-top:3px}.nozzle-map-build-summary>span:last-child{color:#8ea796;flex:none}
+#tank-nozzle-quick-spec-fields .tank-fields{grid-template-columns:1fr 1fr}#tank-nozzle-quick-spec-fields .tank-fields>label:first-child{grid-column:1/-1}
+.nozzle-map-views{display:grid;grid-template-columns:1fr 1fr;gap:6px;padding:4px;margin:12px 0;background:#edf3ed;border-radius:10px}.nozzle-map-views button{padding:10px 5px;min-width:0;min-height:62px;background:transparent;color:#7f9788;border:1px solid transparent;border-radius:8px;font:inherit;font-size:12px;cursor:pointer;line-height:1.5}.nozzle-map-views small{display:block;font-size:13px;margin-top:4px;font-variant-numeric:tabular-nums}.nozzle-map-views button[aria-pressed=true]{background:#fff;border-color:#c3dccb;color:#316e50;box-shadow:0 1px 4px #28462e0a}
+.tank-nozzle-context .nozzle-location-focus svg{display:block;width:100%;height:auto;max-height:none;min-height:0;margin:0}
+.nozzle-map-heading{display:flex;align-items:center;justify-content:space-between;gap:10px;margin:12px 0}
+.nozzle-map-heading>div{display:flex;gap:9px;align-items:center;min-width:0}.nozzle-map-heading strong{color:#315e4e;font-size:15px;line-height:1.6;overflow-wrap:anywhere}
+.nozzle-map-selected-tag{display:inline-flex;align-items:center;justify-content:center;flex:none;padding:5px 10px;border-radius:8px;background:#faedda;color:#946328;font-weight:700;font-size:13px}
+.nozzle-map-heading>button{flex:none;min-height:42px;border:1px solid #cddfd2;border-radius:9px;background:#fff;color:#4e7e66;font:inherit;font-size:12px;padding:8px 10px;cursor:pointer}
+.nozzle-map-heading>button[aria-pressed=true]{background:#fff1dc;color:#8c6024;border-color:#cfa770}.nozzle-map-heading>button:disabled{opacity:.5}
+.nozzle-map-key{display:flex;align-items:center;gap:7px;color:#7d9184;font-size:11px;line-height:1.6;margin:0 0 18px}.nozzle-map-key>span{width:8px;height:8px;flex:none;border-radius:50%;background:#c58a35}
+.nozzle-map-figure{margin:0 0 18px;padding:15px 13px 12px;background:#fff;border:1px solid #deebe1;border-radius:12px}
+.nozzle-map-figure>figcaption{display:flex;align-items:center;gap:8px;flex-wrap:wrap;color:#4e7461;font-size:13px;line-height:1.5}
+.nozzle-map-figure>figcaption>span:first-child{display:inline-grid;place-items:center;border-radius:50%;background:#edf4ed;color:#648472;width:24px;height:24px;flex:none;font-size:12px}
+.nozzle-map-figure>figcaption strong{font-size:13px;font-weight:600}.nozzle-map-figure>figcaption>button{margin-left:auto;border:0;background:#fbf1e4;border-radius:7px;color:#99672a;font-size:16px;font-weight:600;padding:7px 10px;min-height:40px;cursor:pointer;font-variant-numeric:tabular-nums}.nozzle-map-figure>figcaption>button>span{font-size:12px}
+.nozzle-map-figure>p{margin:7px 3px 0;color:#72877a;font-size:12px;line-height:1.8}.nozzle-map-fixed{font-size:11px;color:#84968a;margin-left:auto}
+.nozzle-map-secondary{margin:8px 0 0;display:flex;justify-content:flex-end}.nozzle-map-secondary button{font:inherit;font-size:12px;padding:8px 11px;min-height:40px;background:#f7faf5;border:1px solid #dfebdf;border-radius:8px;color:#60886d;cursor:pointer}
+.nozzle-map-choices{padding:14px;margin:12px 0;background:#eef5ef;border:1px solid #ccdece;border-radius:10px}.nozzle-map-choices>strong{display:block;font-size:13px;line-height:1.6;color:#466d54}.nozzle-map-choices>div{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:10px}.nozzle-map-choices button{min-width:0;min-height:48px;padding:9px;text-align:left;border:1px solid #d5e2d7;border-radius:8px;background:#fff;color:#3d7051;font:inherit;font-size:13px;cursor:pointer}.nozzle-map-choices small{display:block;font-size:11px;line-height:1.5;color:#8a9d8c;margin-top:3px;overflow-wrap:anywhere}
+.nozzle-map-edit-note,.nozzle-map-conflict{padding:10px 12px;border-left:3px solid #c49a5a;background:#fff6e8;color:#987337;font-size:12px;line-height:1.8;margin:12px 0}.nozzle-map-conflict button{display:block;padding:5px 0;border:0;background:transparent;color:#956526;font:inherit;cursor:pointer}
+.nozzle-map-other{cursor:pointer}.nozzle-map-other:hover>circle:last-of-type,.nozzle-map-other:focus-visible>circle:last-of-type{fill:#c2d9cc;stroke:#3c825d;stroke-width:2}
+.nozzle-location-focus [data-nozzle-position]{cursor:crosshair}.nozzle-location-focus [data-nozzle-position]:focus-visible{outline:2px solid #ad8239;outline-offset:2px}
+.tank-nozzle-context-caption #tank-nozzle-3d{width:auto;margin:0 0 0 auto;padding:7px 11px;background:#fff;border:1px solid #d9e6db;border-radius:8px;font-size:12px;min-height:40px}
+@media(max-width:800px){.nozzle-map-figure{padding:12px 8px}.nozzle-map-heading{align-items:flex-start}.nozzle-map-heading strong{font-size:14px}.nozzle-map-figure>figcaption{gap:6px}.nozzle-map-figure>figcaption>button{font-size:14px}.nozzle-map-choices>div{grid-template-columns:1fr}.nozzle-map-key{font-size:11px}}

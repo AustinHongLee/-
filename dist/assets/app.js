@@ -397,7 +397,7 @@ $('parameter-form').addEventListener('input',event=>{
   $('geometry-status').textContent='重新計算中…';clearTimeout(timer);timer=setTimeout(()=>{if(['padManufacturing','autoPrecision','bendAngle'].includes(el.name))renderForm();compute();},120);
 });
 $('parameter-form').addEventListener('click',e=>{
-  const shape=e.target.closest('[data-steel-section]');if(shape){const patch=steelChoicePatch(state.params,shape.dataset.steelSection);if(patch){endControls.close();Object.assign(state.params,patch);state.template='';syncInputSetup();renderForm();compute();viewer.fit();}return;}
+  const shape=e.target.closest('[data-steel-section]');if(shape){const patch=steelChoicePatch(state.params,shape.dataset.steelSection);if(patch){endControls.close();Object.assign(state.params,patch);state.template='';syncInputSetup();renderForm();compute();viewer.fit();}const picker=$('steel-type-picker');if(picker){picker.open=false;picker.querySelector('summary')?.focus({preventScroll:true});}return;}
   const face=e.target.closest('[data-steel-face]');if(face){selectSteelFace(face.dataset.steelFace);renderForm();return;}
   const rotation=e.target.closest('[data-visual-field="sectionRotation"]');if(rotation){applyVisual({field:'sectionRotation',value:Number(rotation.dataset.visualValue)});return;}
   const rotationMap=e.target.closest('[data-visual-map="steel-rotation"]');if(rotationMap){const point=visualMapPoint(rotationMap,e);applyVisual(steelRotationAction(state.params,point.x,point.y));return;}

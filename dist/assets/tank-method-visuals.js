@@ -1,3 +1,4 @@
+import {shellRingStations} from './tank-shell-layout.js';
 // SVG drawings for the fabrication-method panel and work order. Pure functions of an estimate; no DOM access.
 import {outerProfile} from './tank-heads.js';
 import {padOutline} from './tank-attachments.js';
@@ -39,7 +40,7 @@ export function elevation(r,box,{extra={}}={}){
   const f=fit(bounds,box),to=([radial,axial])=>vertical?f.map([radial,axial]):f.map([axial,radial]);
   const right=half.points,left=right.map(([x,y])=>[-x,y]).reverse();
   const outline=half.open?pathOf([...left.slice(0,-1).map(to),...right.slice(1).map(to)],false)+`M${to([r.di/2,r.frame.topTangent]).join(' ')}L${to([-r.di/2,r.frame.topTangent]).join(' ')}`:pathOf([...right.map(to),...left.map(to)]);
-  return {vertical,to,s:f.s,outline,body:`<path d="${outline}" fill="${C.fill}" stroke="${C.metal}" stroke-width="1.6"/>`,seamLines:()=>{let s='';for(let i=1;i<r.courses;i++){const y=r.frame.bodyBottom+i*(r.courseHeight+r.input.gap)-r.input.gap/2;const a=to([-r.od/2,y]),b=to([r.od/2,y]);s+=`<path d="M${a[0]} ${a[1]}L${b[0]} ${b[1]}" stroke="${C.metal}" stroke-width=".6" stroke-dasharray="4 3" opacity=".6"/>`;}return s;}};
+  return {vertical,to,s:f.s,outline,body:`<path d="${outline}" fill="${C.fill}" stroke="${C.metal}" stroke-width="1.6"/>`,seamLines:()=>{let s='';for(const {z} of shellRingStations(r)){const y=r.frame.bodyBottom+z;const a=to([-r.od/2,y]),b=to([r.od/2,y]);s+=`<path d="M${a[0]} ${a[1]}L${b[0]} ${b[1]}" stroke="${C.metal}" stroke-width=".6" stroke-dasharray="4 3" opacity=".6"/>`;}return s;}};
 }
 // ---------------------------------------------------------------- end type glyphs (pickers)
 export function endGlyph(type,{position='top',horizontal=false}={}){
@@ -258,7 +259,7 @@ export function weldMapVisual(r){
   const ox=40,top=40,sw=340,sh=Math.min(150,sw*r.bodyHeight/r.circumference),oy=top+sh,sx=sw/r.circumference,sy=sh/r.bodyHeight,W=620,H=Math.round(Math.max(oy+186,110+rows.length*26));
   let lines=`<rect x="${ox}" y="${top}" width="${sw}" height="${sh}" fill="${C.fill}" stroke="${C.metal}"/>`;
   for(const piece of r.assembly.slice(0,600)){const x=ox+piece.start*sx,y0=oy-piece.z*sy,y1=oy-(piece.z+piece.height)*sy;lines+=`<path d="M${x} ${y0}V${y1}" stroke="${colors.A}" stroke-width="2"/>`;}
-  for(let i=1;i<r.courses;i++){const y=oy-(i*(r.courseHeight+r.input.gap)-r.input.gap/2)*sy;lines+=`<path d="M${ox} ${y}H${ox+sw}" stroke="${colors.B}" stroke-width="2"/>`;}
+  for(const {z} of shellRingStations(r)){const y=oy-z*sy;lines+=`<path d="M${ox} ${y}H${ox+sw}" stroke="${colors.B}" stroke-width="2"/>`;}
   const edge=which=>colors[r.endTypes[which]==='open'?'':endJointCategory(r,which)]??'none';
   lines+=`<path d="M${ox} ${oy}H${ox+sw}" stroke="${edge('bottom')}" stroke-width="3"/><path d="M${ox} ${top}H${ox+sw}" stroke="${edge('top')}" stroke-width="3"/>`;
   for(const n of r.nozzlePlan?.items??[])if(n.host==='shell'){const x=ox+n.unfoldX*sx,y=oy-n.height*sy;lines+=`<circle cx="${x}" cy="${y}" r="${Math.max(3,n.hole/2*sx)}" fill="none" stroke="${colors.D}" stroke-width="2"/>`;}
